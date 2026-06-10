@@ -13,6 +13,17 @@ interrupt -> event queue -> event loop -> FSM / handler
 The current target is a CH32V003 wired to an SX1278 or Ebyte E32-style LoRa
 module. It is used as a raw LoRa modem by a Linux host. 
 
+## Prototype Hardware
+
+Early CH32V003 + SX1278/Ebyte-module prototype wired to a quarter-wave ground
+plane antenna:
+
+![at-os3 CH32V003 LoRa modem prototype](docs/images/hardware-hat-prototype.jpg)
+
+Development setup used with a Linux host and window-mounted antenna:
+
+![at-os3 development node with antenna](docs/images/hardware-fedora-node.png)
+
 ## What OS3 Means Here
 
 `at-os3` is built on the OS3 kernel model used in this repository: a small
