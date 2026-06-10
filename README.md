@@ -169,8 +169,45 @@ Expected response:
 +OK
 ```
 
-The version string has not yet been renamed in firmware; it should be updated
-when the first `at-os3` release version is cut.
+## Host Test Script
+
+The repository includes [tools/test_radio.py](tools/test_radio.py), a small
+host-side serial test script for RX/TX checks. It requires Python 3 and
+`pyserial`:
+
+```bash
+python3 -m pip install pyserial
+```
+
+Probe the modem and SX1278 SPI link:
+
+```bash
+python3 tools/test_radio.py /dev/ttyACM0 --probe
+```
+
+Listen on a raw LoRa profile:
+
+```bash
+python3 tools/test_radio.py /dev/ttyACM0 \
+  --freq 436995000 --sf 8 --bw 62.5 --cr 7 --sw 0x12 \
+  --rx-seconds 120
+```
+
+Transmit text on the same profile:
+
+```bash
+python3 tools/test_radio.py /dev/ttyACM0 \
+  --freq 436995000 --sf 8 --bw 62.5 --cr 7 --sw 0x12 \
+  --send-text ping
+```
+
+Transmit a hexadecimal payload:
+
+```bash
+python3 tools/test_radio.py /dev/ttyACM0 \
+  --freq 436995000 --sf 8 --bw 62.5 --cr 7 --sw 0x12 \
+  --send 70696E67
+```
 
 ## Typical RX Setup
 
