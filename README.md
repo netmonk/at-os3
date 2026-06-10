@@ -24,6 +24,29 @@ Development setup used with a Linux host and window-mounted antenna:
 
 ![at-os3 development node with antenna](docs/images/hardware-fedora-node.png)
 
+## Use Case: PTGS
+
+`at-os3` was built to act as the small RF modem in a split TinyGS-style ground
+station.
+
+The companion project is PTGS:
+
+```text
+https://github.com/netmonk/ptgs
+```
+
+PTGS runs on a Linux host. It connects to the TinyGS MQTT backend, receives
+backend modem commands, computes Doppler correction from TLE/TLX data, and
+publishes received packets back as TinyGS telemetry.
+
+`at-os3` stays next to the radio hardware. It only handles the deterministic
+modem side: UART AT commands, SX1278 register programming, LoRa RX/TX,
+interrupt handling, and packet reports with RSSI/SNR/frequency error.
+
+This split keeps TLS, MQTT credentials, logs, and satellite scheduling on
+Linux, while the CH32V003 remains a small replaceable LoRa front end close to
+the antenna.
+
 ## What OS3 Means Here
 
 `at-os3` is built on the OS3 kernel model used in this repository: a small
