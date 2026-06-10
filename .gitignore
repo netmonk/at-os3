@@ -1,0 +1,9 @@
+build/
+.claude/
+*.o
+*.elf
+*.bin
+*.map
+*.lst
+*.log
+*.pdf
