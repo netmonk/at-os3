@@ -16,6 +16,23 @@
 
 set -e
 
+CLOCK=${CLOCK:-HSE}
+
+case "$CLOCK" in
+  HSE)
+    CLOCK_DEF="--defsym CONFIG_CLOCK_HSE=1"
+    BIN_IMAGE=kernel-hse.bin
+    ;;
+  HSI)
+    CLOCK_DEF="--defsym CONFIG_CLOCK_HSI=1"
+    BIN_IMAGE=kernel-hsi.bin
+    ;;
+  *)
+    echo "Usage: CLOCK=HSE|HSI ./run.sh"
+    exit 1
+    ;;
+esac
+
 BUILD_DIR=build/ch32v003
 mkdir -p $BUILD_DIR
 rm -f $BUILD_DIR/*.o $BUILD_DIR/*.elf $BUILD_DIR/*.bin
@@ -23,7 +40,7 @@ rm -f $BUILD_DIR/*.o $BUILD_DIR/*.elf $BUILD_DIR/*.bin
 # ------------------------------------------------------------------------------
 # Assembler flags for CH32V003 (RV32EC with Zicsr extension)
 # ------------------------------------------------------------------------------
-AS_FLAGS="-g -mabi=ilp32e -march=rv32ec_zicsr --warn --fatal-warnings"
+AS_FLAGS="-g -mabi=ilp32e -march=rv32ec_zicsr --warn --fatal-warnings $CLOCK_DEF"
 
 # ------------------------------------------------------------------------------
 # Assemble core modules (hardware-agnostic)
@@ -96,14 +113,14 @@ riscv32-unknown-elf-ld -g -T link/ch32v003.ld \
 # Generate binary image
 # ------------------------------------------------------------------------------
 echo "Generating binary..."
-riscv32-unknown-elf-objcopy -O binary $BUILD_DIR/kernel.elf $BUILD_DIR/kernel.bin
+riscv32-unknown-elf-objcopy -O binary $BUILD_DIR/kernel.elf $BUILD_DIR/$BIN_IMAGE
 
 # ------------------------------------------------------------------------------
 # Print build summary
 # ------------------------------------------------------------------------------
 echo ""
 echo "Build complete:"
-ls -la $BUILD_DIR/kernel.elf $BUILD_DIR/kernel.bin
+ls -la $BUILD_DIR/kernel.elf $BUILD_DIR/$BIN_IMAGE
 
 echo ""
 echo "Section sizes:"

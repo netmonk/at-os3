@@ -150,14 +150,35 @@ From the repository root:
 ./run.sh
 ```
 
+This builds the HSE clock variant by default. It expects a board with a
+working 24 MHz external crystal.
+
 Build output is written to:
 
 ```text
 build/ch32v003/kernel.elf
-build/ch32v003/kernel.bin
+build/ch32v003/kernel-hse.bin
 ```
 
-The script also prints section sizes and `.kernel_init` entries.
+To build the HSI clock variant, use:
+
+```bash
+CLOCK=HSI ./run.sh
+```
+
+The HSI build uses the CH32V003 internal 24 MHz RC oscillator.
+
+Its binary output is:
+
+```text
+build/ch32v003/kernel-hsi.bin
+```
+
+Valid clock selections are `CLOCK=HSE` and `CLOCK=HSI`.
+
+The script cleans and reuses `build/ch32v003` for each build. Object files and
+`kernel.elf` keep the same names; only the generated binary image is named by
+clock variant. The script also prints section sizes and `.kernel_init` entries.
 
 ## Flash
 
@@ -165,8 +186,10 @@ Flash the generated binary with your CH32V003 programming tool. For a local
 `minichlink` setup, the command shape is:
 
 ```bash
-minichlink -w build/ch32v003/kernel.bin flash
+minichlink -w build/ch32v003/kernel-hse.bin flash
 ```
+
+Use `build/ch32v003/kernel-hsi.bin` instead if you built with `CLOCK=HSI`.
 
 `minichlink` is part of the `ch32fun` project:
 
