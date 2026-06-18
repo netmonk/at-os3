@@ -29,8 +29,9 @@ from test_radio import Radio, ReceivedPacket
 # Each entry: (name, freq_hz, sf, bw_khz, cr, preamble, sync_word, iqi, crc, fldro, implicit_len)
 # implicit_len=0 → explicit header; >0 → implicit header with that payload size
 # freq_hz values are relative to BASE_FREQ_DEFAULT; freq_shift is added at runtime.
+# Override the default band with the LORA_BASE_FREQ environment variable.
 
-BASE_FREQ_DEFAULT = 433175000
+BASE_FREQ_DEFAULT = int(os.environ.get("LORA_BASE_FREQ", 433175000))
 F = BASE_FREQ_DEFAULT
 
 PROFILES = [
@@ -166,8 +167,6 @@ def run_one(
 
     return Result(True, pkt.rssi, pkt.snr, pkt.frequency_error, "")
 
-
-BASE_FREQ_DEFAULT = 433175000
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Bidirectional LoRa loopback test")
