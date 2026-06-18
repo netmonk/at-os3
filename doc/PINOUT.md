@@ -6,13 +6,14 @@ firmware.
 ## Target
 
 - MCU: CH32V003
-- Radio: SX1278-compatible LoRa front end, currently wired through an
-  Ebyte E32-style module pinout
+- Radio: selected at build time with `RADIO=SX1278` or `RADIO=SX1262`
 - Host interface: USART1 at 115200 8N1
 
 ## Radio SPI And Control Pins
 
 All radio SPI and RF-control pins are on GPIOC.
+
+### `RADIO=SX1278` / E32-style module
 
 | CH32V003 pin | Direction | Function | Active level | Notes |
 |---|---:|---|---|---|
@@ -25,7 +26,26 @@ All radio SPI and RF-control pins are on GPIOC.
 | `PC6` | AF output | `MOSI` | n/a | SPI1 MOSI |
 | `PC7` | input | `MISO` | n/a | SPI1 MISO |
 
+### `RADIO=SX1262` / E22-style module
+
+| CH32V003 pin | Direction | Function | Active level | Notes |
+|---|---:|---|---|---|
+| `PC0` | output | `NRST` | low | SX1262/module reset |
+| `PC1` | input | `BUSY` | high while busy | SX1262 command busy pin |
+| `PC2` | input | `DIO1` | rising edge | SX1262 `RxDone` / `TxDone`, EXTI line 2 |
+| `PC3` | output | `RX_EN` | high | E22 RX-side RF switch enable |
+| `PC4` | output | `CS` / `NSS` | low | SPI chip select |
+| `PC5` | AF output | `SCK` | n/a | SPI1 clock |
+| `PC6` | AF output | `MOSI` | n/a | SPI1 MOSI |
+| `PC7` | input | `MISO` | n/a | SPI1 MISO |
+
+For E22/SX1262 modules, the firmware configures SX1262 `DIO2` as the RF switch
+control output for module `TX_EN`. SX1262 `DIO3` is configured as the module
+TCXO supply control. These are module-side radio pins, not CH32V003 GPIO pins.
+
 ## RF Switch States
+
+### SX1278 / E32
 
 | Radio state | `TX_EN` (`PC1`) | `RX_EN` (`PC3`) |
 |---|---:|---:|
@@ -35,7 +55,17 @@ All radio SPI and RF-control pins are on GPIOC.
 | RX continuous | low | high |
 | TX | high | low |
 
-`DIO0` is routed to EXTI line 2 and handled through the canonical event path:
+### SX1262 / E22
+
+| Radio state | `TX_EN` (`DIO2`) | `RX_EN` (`PC3`) |
+|---|---:|---:|
+| Boot / idle before radio init | radio-controlled | low |
+| Standby | radio-controlled | low |
+| RX continuous | low | high |
+| TX | high | low |
+
+`PC2` is routed to EXTI line 2 and handled through the canonical event path.
+It carries `DIO0` for SX1278 builds and `DIO1` for SX1262 builds:
 
 ```text
 EXTI IRQ -> event_enqueue -> event_loop -> lora_fsm
@@ -63,7 +93,7 @@ The firmware does not manage power rails. The board must provide:
 
 | Rail | Use |
 |---|---|
-| `3.3 V` | CH32V003 and SX1278 logic/radio supply, according to board design |
+| `3.3 V` | CH32V003 and radio logic/radio supply, according to board design |
 | `5 V` | Optional external RF modules that require 5 V, such as some LNAs or PA/LNA boards |
 | `GND` | Common ground between host UART, MCU, radio, and any RF accessory |
 
@@ -78,4 +108,3 @@ The authoritative pin definitions are in:
 - `drivers/ch32v003/uart.S`
 - `drivers/ch32v003/led.S`
 - `drivers/ch32v003/init.S`
-

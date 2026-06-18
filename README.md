@@ -272,6 +272,12 @@ python3 tools/test_radio.py /dev/ttyACM0 \
   --send 70696E67
 ```
 
+For interoperability testing, [tools/test_loopback.py](tools/test_loopback.py)
+runs bidirectional profile checks between two serial modems. The `sx1262`
+branch has been validated with an ESP32 LoRa node on one side and a CH32V003
+`RADIO=SX1262` firmware on the other side, with the current loopback suite
+passing `56/56` profile-direction checks.
+
 ## Typical RX Setup
 
 Example raw LoRa RX profile:
