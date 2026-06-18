@@ -77,10 +77,12 @@
 # ==============================================================================
 
 .include "core/events.inc"
+.include "subfsm/lora_data.inc"
 
 # ------------------------------------------------------------------------------
 # External dependencies
 # ------------------------------------------------------------------------------
+.extern lora_fsm_data
 .extern register_activity
 .extern event_enqueue
 .extern uart_hw_rx_ring_get
@@ -103,8 +105,9 @@
 .equ AT_DEFAULT_CR,     1       # AT CR code: 4/5
 .equ AT_DEFAULT_PRE,    8
 .equ AT_DEFAULT_POWER,  15
-.equ AT_DEFAULT_ADDR,   0
-.equ AT_DEFAULT_NETID,  0
+.equ AT_DEFAULT_ADDR,      0
+.equ AT_DEFAULT_NETID,     0
+.equ AT_DEFAULT_SYNC_WORD, 0x12      # LoRa public sync word (matches LORA_SYNC_WORD_PUBLIC)
 
 # NOTE: the AT BW-code → Hz conversion lives in lora_fsm.S (lora_bw_hz_table).
 # AT+PARAMETER ships the raw BW code inside the packed LORA_CMD_SET_PARAMS event,
@@ -121,20 +124,12 @@ at_line_buf:    .space AT_LINE_MAX
 at_line_len:    .word 0
 at_uart_synced: .word 0
 
-# Shadow config (mirrors what was last sent to lora_fsm)
-at_cfg_freq:    .word 0
-at_cfg_sf:      .word 0
-at_cfg_bw:      .word 0     # AT BW code 0-9
-at_cfg_cr:      .word 0     # AT CR code 1-4
-at_cfg_preamble:.word 0
-at_cfg_power:   .word 0
-at_cfg_iqi:     .word 0     # 0=normal IQ, 1=inverted IQ
-at_cfg_crc:     .word 0     # PHY CRC: 0=off, 1=on
-at_cfg_ldro:    .word 0     # LDRO mode: 0=off, 1=on, 2=auto
-at_cfg_len:     .word 0     # LoRa implicit header length; 0=explicit
+# AT-layer-only shadows (no lora_fsm_data counterpart or incompatible encoding)
+at_cfg_bw:      .word 0     # AT BW code 0-9 (lora_fsm_data stores Hz, not AT code)
 at_cfg_addr:    .word 0
 at_cfg_netid:   .word 0
-at_cfg_mode:    .word 0     # 0=RX, 1=standby
+# All other radio config (freq, sf, cr, preamble, power, iqi, crc, ldro, len,
+# syncword) is read directly from lora_fsm_data — single source of truth.
 
 at_tx_buf:      .space AT_TX_MAX
 at_tx_len:      .word 0
@@ -211,40 +206,13 @@ at_init:
     addi sp, sp, -4
     sw   ra, 0(sp)
 
-    # Load defaults into shadow config
-    la   t0, at_cfg_freq
-    li   t1, AT_DEFAULT_FREQ
-    sw   t1, 0(t0)
-    la   t0, at_cfg_sf
-    li   t1, AT_DEFAULT_SF
-    sw   t1, 0(t0)
+    # Initialize AT-layer-only shadows (defaults match lora_defaults_apply)
     la   t0, at_cfg_bw
     li   t1, AT_DEFAULT_BW
     sw   t1, 0(t0)
-    la   t0, at_cfg_cr
-    li   t1, AT_DEFAULT_CR
-    sw   t1, 0(t0)
-    la   t0, at_cfg_preamble
-    li   t1, AT_DEFAULT_PRE
-    sw   t1, 0(t0)
-    la   t0, at_cfg_power
-    li   t1, AT_DEFAULT_POWER
-    sw   t1, 0(t0)
-    la   t0, at_cfg_iqi
-    sw   zero, 0(t0)
-    la   t0, at_cfg_crc
-    li   t1, 1
-    sw   t1, 0(t0)
-    la   t0, at_cfg_ldro
-    li   t1, 2
-    sw   t1, 0(t0)
-    la   t0, at_cfg_len
-    sw   zero, 0(t0)
     la   t0, at_cfg_addr
     sw   zero, 0(t0)
     la   t0, at_cfg_netid
-    sw   zero, 0(t0)
-    la   t0, at_cfg_mode
     sw   zero, 0(t0)
     la   t0, at_line_len
     sw   zero, 0(t0)
@@ -343,10 +311,10 @@ at_notify_handler:
     beq  t0, t1, at_notify_tx_done
 
     li   t1, RADIO_NOTIFY_TX_TIMEOUT
-    beq  t0, t1, at_notify_tx_err
+    beq  t0, t1, at_notify_done
 
     li   t1, RADIO_NOTIFY_TX_UNEXPECTED
-    beq  t0, t1, at_notify_tx_err
+    beq  t0, t1, at_notify_tx_unexpected
 
     li   t1, RADIO_NOTIFY_RX_READY
     beq  t0, t1, at_notify_rx_ready
@@ -373,8 +341,10 @@ at_notify_ready:
     call at_emit_buf
     j    at_notify_done
 
-at_notify_tx_err:
-    # TX failed — just go back to RX silently (no +ERR for TX timeout)
+at_notify_tx_unexpected:
+    la   a0, at_str_err1
+    li   a1, AT_STR_ERR1_LEN
+    call at_emit_buf
     j    at_notify_done
 
 at_notify_crc_err:
@@ -671,9 +641,6 @@ at_try_mode:
     li   a2, 0
     call event_enqueue
     bnez a0, at_parse_err4
-    li   t0, 1
-    la   t1, at_cfg_mode
-    sw   t0, 0(t1)
     j    at_parse_ok
 at_mode_set_rx:
     li   a0, ((EV_KIND_SOFT << EV_KIND_SHIFT) | (EV_SOFT_LORA_CMD << EV_ID_SHIFT) | LORA_CMD_SET_STATE)
@@ -681,8 +648,6 @@ at_mode_set_rx:
     li   a2, 0
     call event_enqueue
     bnez a0, at_parse_err4
-    la   t1, at_cfg_mode
-    sw   zero, 0(t1)
     j    at_parse_ok
 at_mode_query:
     addi a0, s0, 5             # ptr after '?': reject "AT+MODE?xx" (#1)
@@ -700,8 +665,9 @@ at_mode_query:
     call console_putc
     li   a0, '='
     call console_putc
-    la   t0, at_cfg_mode
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_RADIO_ON(t0)
+    xori a0, a0, 1
     call at_emit_uint
     li   a0, '\r'
     call console_putc
@@ -741,9 +707,6 @@ at_try_band:
     li   a2, 0
     call event_enqueue
     bnez a0, at_parse_err4
-    lw   t0, 12(sp)
-    la   t1, at_cfg_freq
-    sw   t0, 0(t1)
     j    at_parse_ok
 at_band_query:
     addi a0, s0, 5             # ptr after '?': reject "AT+BAND?xx" (#1)
@@ -761,8 +724,8 @@ at_band_query:
     call console_putc
     li   a0, '='
     call console_putc
-    la   t0, at_cfg_freq
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_FREQ_HZ(t0)
     call at_emit_uint
     li   a0, '\r'
     call console_putc
@@ -861,18 +824,9 @@ at_try_parameter:
     call event_enqueue
     bnez a0, at_parse_err4            # queue full → +ERR, shadows untouched (#3)
 
-    # Commit shadows only after the event was accepted.
-    lw   t0, 12(sp)
-    la   t1, at_cfg_sf
-    sw   t0, 0(t1)
+    # Commit only the AT-layer BW shadow (AT code); sf/cr/preamble live in lora_fsm_data.
     lw   t0, 16(sp)
     la   t1, at_cfg_bw
-    sw   t0, 0(t1)
-    lw   t0, 20(sp)
-    la   t1, at_cfg_cr
-    sw   t0, 0(t1)
-    lw   t0, 24(sp)
-    la   t1, at_cfg_preamble
     sw   t0, 0(t1)
     j    at_parse_ok
 
@@ -936,16 +890,6 @@ at_try_pkt:
     li   a2, 0
     call event_enqueue
     bnez a0, at_parse_err4
-
-    lw   t0, 12(sp)
-    la   t1, at_cfg_crc
-    sw   t0, 0(t1)
-    lw   t0, 16(sp)
-    la   t1, at_cfg_ldro
-    sw   t0, 0(t1)
-    lw   t0, 20(sp)
-    la   t1, at_cfg_len
-    sw   t0, 0(t1)
     j    at_parse_ok
 
 at_pkt_query:
@@ -959,18 +903,18 @@ at_pkt_query:
     call at_emit_buf
     li   a0, '='
     call console_putc
-    la   t0, at_cfg_crc
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_CRC(t0)
     call at_emit_uint
     li   a0, ','
     call console_putc
-    la   t0, at_cfg_ldro
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_LDRO(t0)
     call at_emit_uint
     li   a0, ','
     call console_putc
-    la   t0, at_cfg_len
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_IMPLICIT_LEN(t0)
     call at_emit_uint
     li   a0, '\r'
     call console_putc
@@ -991,23 +935,24 @@ at_parameter_query:
     call at_emit_buf
     li   a0, '='
     call console_putc
-    la   t0, at_cfg_sf
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_SF(t0)         # SF: same encoding
     call at_emit_uint
     li   a0, ','
     call console_putc
     la   t0, at_cfg_bw
-    lw   a0, 0(t0)
+    lw   a0, 0(t0)                    # BW: AT code (lora_fsm_data stores Hz)
     call at_emit_uint
     li   a0, ','
     call console_putc
-    la   t0, at_cfg_cr
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_CR(t0)
+    addi a0, a0, -4                   # host 5-8 → AT code 1-4
     call at_emit_uint
     li   a0, ','
     call console_putc
-    la   t0, at_cfg_preamble
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_PREAMBLE(t0)   # preamble: same encoding
     call at_emit_uint
     li   a0, '\r'
     call console_putc
@@ -1043,10 +988,7 @@ at_try_crfop:
     mv   a0, t1
     li   a2, 0
     call event_enqueue
-    bnez a0, at_parse_err4     # commit shadow only if accepted (#3)
-    lw   t0, 12(sp)
-    la   t1, at_cfg_power
-    sw   t0, 0(t1)
+    bnez a0, at_parse_err4
     j    at_parse_ok
 at_crfop_query:
     addi a0, s0, 6             # ptr after '?': reject "AT+CRFOP?xx" (#1)
@@ -1059,8 +1001,8 @@ at_crfop_query:
     call at_emit_buf
     li   a0, '='
     call console_putc
-    la   t0, at_cfg_power
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_TXP(t0)
     call at_emit_uint
     li   a0, '\r'
     call console_putc
@@ -1166,6 +1108,8 @@ at_try_syncword:
     call at_match_kw
     beqz a0, at_try_send
     lbu  t0, 8(s0)
+    li   t1, '?'
+    beq  t0, t1, at_syncword_query
     li   t1, '='
     bne  t0, t1, at_parse_err4
     addi a0, s0, 9
@@ -1182,6 +1126,26 @@ at_try_syncword:
     li   a2, 0
     call event_enqueue
     bnez a0, at_parse_err4
+    j    at_parse_ok
+
+at_syncword_query:
+    addi a0, s0, 9             # reject "AT+SYNCWORD?xx" (#1)
+    call at_expect_end
+    beqz a0, at_parse_err4
+    li   a0, '+'
+    call console_putc
+    la   a0, at_kw_syncword
+    li   a1, 8
+    call at_emit_buf
+    li   a0, '='
+    call console_putc
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_SYNC_WORD(t0)
+    call at_emit_uint
+    li   a0, '\r'
+    call console_putc
+    li   a0, '\n'
+    call console_putc
     j    at_parse_ok
 
 # --- AT+SEND ---
@@ -1305,9 +1269,6 @@ at_try_iqi:
     li   a2, 0
     call event_enqueue
     bnez a0, at_parse_err4
-    lw   t0, 12(sp)
-    la   t1, at_cfg_iqi
-    sw   t0, 0(t1)
     j    at_parse_ok
 
 at_iqi_query:
@@ -1321,8 +1282,8 @@ at_iqi_query:
     call at_emit_buf
     li   a0, '='
     call console_putc
-    la   t0, at_cfg_iqi
-    lw   a0, 0(t0)
+    la   t0, lora_fsm_data
+    lw   a0, LORA_DATA_IQI(t0)
     call at_emit_uint
     li   a0, '\r'
     call console_putc
@@ -1340,35 +1301,18 @@ at_try_factory:
     addi a0, s0, 7             # reject "AT+FACTORYjunk" (#1)
     call at_expect_end
     beqz a0, at_parse_err4
-    # Reset shadow config to defaults
-    la   t0, at_cfg_freq
-    li   t1, AT_DEFAULT_FREQ
-    sw   t1, 0(t0)
-    la   t0, at_cfg_sf
-    li   t1, AT_DEFAULT_SF
-    sw   t1, 0(t0)
+    # Enqueue FIRST: commit nothing until the event is accepted (#3).
+    # LORA_CMD_FACTORY resets lora_fsm_data and reinits hardware; +READY follows.
+    li   a0, ((EV_KIND_SOFT << EV_KIND_SHIFT) | (EV_SOFT_LORA_CMD << EV_ID_SHIFT) | LORA_CMD_FACTORY)
+    li   a1, 0
+    li   a2, 0
+    call event_enqueue
+    bnez a0, at_parse_err4     # queue full → +ERR, no shadow touched
+    # Reset AT-layer-only shadows; radio config is reset by lora_action_factory
+    # via lora_defaults_apply — no duplicate state here (#3).
     la   t0, at_cfg_bw
     li   t1, AT_DEFAULT_BW
     sw   t1, 0(t0)
-    la   t0, at_cfg_cr
-    li   t1, AT_DEFAULT_CR
-    sw   t1, 0(t0)
-    la   t0, at_cfg_preamble
-    li   t1, AT_DEFAULT_PRE
-    sw   t1, 0(t0)
-    la   t0, at_cfg_power
-    li   t1, AT_DEFAULT_POWER
-    sw   t1, 0(t0)
-    la   t0, at_cfg_iqi
-    sw   zero, 0(t0)
-    la   t0, at_cfg_crc
-    li   t1, 1
-    sw   t1, 0(t0)
-    la   t0, at_cfg_ldro
-    li   t1, 2
-    sw   t1, 0(t0)
-    la   t0, at_cfg_len
-    sw   zero, 0(t0)
     la   t0, at_cfg_addr
     sw   zero, 0(t0)
     la   t0, at_cfg_netid
@@ -1376,7 +1320,7 @@ at_try_factory:
     la   a0, at_str_factory
     li   a1, AT_STR_FACTORY_LEN
     call at_emit_buf
-    j    at_parse_done          # no extra +OK after +FACTORY
+    j    at_parse_done          # no +OK; +READY arrives via lora_fsm notify
 
 at_parse_err4:
     la   a0, at_str_err4

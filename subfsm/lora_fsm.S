@@ -46,16 +46,19 @@
 .equ LORA_NUM_STATES,       3
 
 # Events (internal to this FSM)
-.equ LORA_EV_DIO0,         0
-# event slot 1 is intentionally reserved/no-op; raw AT operation uses one
-# physical LoRa packet per TX command, while the 16-column table leaves room.
-.equ LORA_EV_CMD_RX,       2
-.equ LORA_EV_CFG,          3
-.equ LORA_EV_RADIO_ON,     4
-.equ LORA_EV_RADIO_OFF,    5
-.equ LORA_EV_TX_FRAME,     6
-.equ LORA_EV_SET_PARAMS,   7           # Atomic SF+BW+CR+preamble (was pad column)
-.equ LORA_EV_RESET,        8           # Hardware reset + full reconfig + RX re-arm
+.equ LORA_EV_DIO0,             0
+.equ LORA_EV_SET_FREQ,         1   # Apply frequency
+.equ LORA_EV_CMD_RX,           2
+.equ LORA_EV_SET_TXP,          3   # Apply TX power
+.equ LORA_EV_RADIO_ON,         4
+.equ LORA_EV_RADIO_OFF,        5
+.equ LORA_EV_TX_FRAME,         6
+.equ LORA_EV_SET_PARAMS,       7   # Atomic SF+BW+CR+preamble
+.equ LORA_EV_RESET,            8   # Hardware reset + full reconfig + RX re-arm
+.equ LORA_EV_FACTORY,          9   # Factory reset: config defaults + hardware reinit
+.equ LORA_EV_SET_IQI,         10   # Apply IQ inversion
+.equ LORA_EV_SET_SYNC_WORD,   11   # Apply sync word
+.equ LORA_EV_SET_PKT_PROFILE, 12   # Apply CRC+LDRO+implicit length profile
 .equ LORA_NUM_EVENTS,      16          # Must be power of 2
 .equ LORA_EVENT_BITS,      4           # log2(16)
 
@@ -115,27 +118,7 @@
 .equ LORA_ACTIVITY_TIMER_ID, 7
 .equ LORA_ACTIVITY_PULSE_TICKS, 1200000
 
-# LoRa-specific data offsets (after FSM_DATA)
-.equ LORA_DATA_TX_COUNT,   0
-.equ LORA_DATA_RX_COUNT,   4
-.equ LORA_DATA_FREQ_HZ,    8
-.equ LORA_DATA_FREQ_REG,   12
-.equ LORA_DATA_BW_HZ,      16
-.equ LORA_DATA_BW_CODE,    20
-.equ LORA_DATA_TXP,        24
-.equ LORA_DATA_SF,         28
-.equ LORA_DATA_CR,         32
-.equ LORA_DATA_RADIO_ON,   36
-.equ LORA_DATA_TX_PTR,     40
-.equ LORA_DATA_TX_LEN,     44
-.equ LORA_DATA_CFG_DIRTY,  48
-.equ LORA_DATA_CAL_HZ,     52
-.equ LORA_DATA_PREAMBLE,   56
-.equ LORA_DATA_IQI,        60
-.equ LORA_DATA_SYNC_WORD,  64
-.equ LORA_DATA_CRC,        68
-.equ LORA_DATA_LDRO,       72
-.equ LORA_DATA_IMPLICIT_LEN, 76
+.include "subfsm/lora_data.inc"
 
 # ------------------------------------------------------------------------------
 # External declarations
@@ -184,6 +167,7 @@ lora_fsm:
     .byte 0                         # +7:  num_events
     .word 0                         # +8:  table ptr
     .word 0                         # +12: actions ptr
+.globl lora_fsm_data
 lora_fsm_data:
     .word 0                         # +16: tx_count
     .word 0                         # +20: rx_count
@@ -235,71 +219,83 @@ lora_state = lora_fsm_data
 .align 2
 
 lora_fsm_table:
-    # State 0 (IDLE)
-    .byte LORA_STATE_IDLE,       0  # DIO0       -> IDLE,      nop
-    .byte LORA_STATE_IDLE,       0  # reserved   -> IDLE,      nop
-    .byte LORA_STATE_RX_ACTIVE,  2  # CMD_RX     -> RX_ACTIVE, start_rx
-    .byte LORA_STATE_IDLE,       3  # CFG        -> IDLE,      cfg
-    .byte LORA_STATE_RX_ACTIVE,  2  # RADIO_ON   -> RX_ACTIVE, start_rx
-    .byte LORA_STATE_IDLE,       4  # RADIO_OFF  -> IDLE,      standby
-    .byte LORA_STATE_TX_ACTIVE,  5  # TX_FRAME   -> TX_ACTIVE, tx_frame
-    .byte LORA_STATE_IDLE,       8  # SET_PARAMS -> IDLE,      set_params
-    .byte LORA_STATE_RX_ACTIVE,  9  # RESET      -> RX_ACTIVE, reset
-    .byte LORA_STATE_IDLE,       0  # pad        -> IDLE,      nop
-    .byte LORA_STATE_IDLE,       0  # pad        -> IDLE,      nop
-    .byte LORA_STATE_IDLE,       0  # pad        -> IDLE,      nop
-    .byte LORA_STATE_IDLE,       0  # pad        -> IDLE,      nop
-    .byte LORA_STATE_IDLE,       0  # pad        -> IDLE,      nop
-    .byte LORA_STATE_IDLE,       0  # pad        -> IDLE,      nop
-    .byte LORA_STATE_IDLE,       0  # pad        -> IDLE,      nop
+    # State 0 (IDLE)         event                 next_state           action
+    .byte LORA_STATE_IDLE,       0  # DIO0            -> IDLE,      nop
+    .byte LORA_STATE_IDLE,      11  # SET_FREQ        -> IDLE,      cfg_freq_shadow
+    .byte LORA_STATE_RX_ACTIVE,  2  # CMD_RX          -> RX_ACTIVE, start_rx
+    .byte LORA_STATE_IDLE,      13  # SET_TXP         -> IDLE,      cfg_txp_shadow
+    .byte LORA_STATE_RX_ACTIVE,  2  # RADIO_ON        -> RX_ACTIVE, start_rx
+    .byte LORA_STATE_IDLE,       4  # RADIO_OFF       -> IDLE,      standby
+    .byte LORA_STATE_TX_ACTIVE,  5  # TX_FRAME        -> TX_ACTIVE, tx_frame
+    .byte LORA_STATE_IDLE,       8  # SET_PARAMS      -> IDLE,      set_params
+    .byte LORA_STATE_RX_ACTIVE,  9  # RESET           -> RX_ACTIVE, reset
+    .byte LORA_STATE_RX_ACTIVE, 10  # FACTORY         -> RX_ACTIVE, factory
+    .byte LORA_STATE_IDLE,      15  # SET_IQI         -> IDLE,      cfg_iqi_shadow
+    .byte LORA_STATE_IDLE,      17  # SET_SYNC_WORD   -> IDLE,      cfg_sync_shadow
+    .byte LORA_STATE_IDLE,      19  # SET_PKT_PROFILE -> IDLE,      cfg_pkt_shadow
+    .byte LORA_STATE_IDLE,       0  # pad             -> IDLE,      nop
+    .byte LORA_STATE_IDLE,       0  # pad             -> IDLE,      nop
+    .byte LORA_STATE_IDLE,       0  # pad             -> IDLE,      nop
 
     # State 1 (TX_ACTIVE)
-    .byte LORA_STATE_TX_ACTIVE,  6  # DIO0       -> TX_ACTIVE, tx_done
-    .byte LORA_STATE_TX_ACTIVE,  0  # reserved   -> TX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  2  # CMD_RX     -> RX_ACTIVE, start_rx
-    .byte LORA_STATE_TX_ACTIVE,  3  # CFG        -> TX_ACTIVE, cfg shadow only
-    .byte LORA_STATE_TX_ACTIVE,  0  # RADIO_ON   -> TX_ACTIVE, nop
-    .byte LORA_STATE_TX_ACTIVE,  0  # RADIO_OFF  -> TX_ACTIVE, nop (retry later)
-    .byte LORA_STATE_TX_ACTIVE,  0  # TX_FRAME   -> TX_ACTIVE, nop
-    .byte LORA_STATE_TX_ACTIVE,  8  # SET_PARAMS -> TX_ACTIVE, set_params (shadow only)
-    .byte LORA_STATE_RX_ACTIVE,  9  # RESET      -> RX_ACTIVE, reset/abort TX
-    .byte LORA_STATE_TX_ACTIVE,  0  # pad        -> TX_ACTIVE, nop
-    .byte LORA_STATE_TX_ACTIVE,  0  # pad        -> TX_ACTIVE, nop
-    .byte LORA_STATE_TX_ACTIVE,  0  # pad        -> TX_ACTIVE, nop
-    .byte LORA_STATE_TX_ACTIVE,  0  # pad        -> TX_ACTIVE, nop
-    .byte LORA_STATE_TX_ACTIVE,  0  # pad        -> TX_ACTIVE, nop
-    .byte LORA_STATE_TX_ACTIVE,  0  # pad        -> TX_ACTIVE, nop
-    .byte LORA_STATE_TX_ACTIVE,  0  # pad        -> TX_ACTIVE, nop
+    .byte LORA_STATE_TX_ACTIVE,  6  # DIO0            -> TX_ACTIVE, tx_done
+    .byte LORA_STATE_TX_ACTIVE, 11  # SET_FREQ        -> TX_ACTIVE, cfg_freq_shadow
+    .byte LORA_STATE_RX_ACTIVE,  2  # CMD_RX          -> RX_ACTIVE, start_rx
+    .byte LORA_STATE_TX_ACTIVE, 13  # SET_TXP         -> TX_ACTIVE, cfg_txp_shadow
+    .byte LORA_STATE_TX_ACTIVE,  0  # RADIO_ON        -> TX_ACTIVE, nop
+    .byte LORA_STATE_TX_ACTIVE,  0  # RADIO_OFF       -> TX_ACTIVE, nop (retry later)
+    .byte LORA_STATE_TX_ACTIVE,  0  # TX_FRAME        -> TX_ACTIVE, nop
+    .byte LORA_STATE_TX_ACTIVE,  8  # SET_PARAMS      -> TX_ACTIVE, set_params (shadow only)
+    .byte LORA_STATE_RX_ACTIVE,  9  # RESET           -> RX_ACTIVE, reset/abort TX
+    .byte LORA_STATE_RX_ACTIVE, 10  # FACTORY         -> RX_ACTIVE, factory/abort TX
+    .byte LORA_STATE_TX_ACTIVE, 15  # SET_IQI         -> TX_ACTIVE, cfg_iqi_shadow
+    .byte LORA_STATE_TX_ACTIVE, 17  # SET_SYNC_WORD   -> TX_ACTIVE, cfg_sync_shadow
+    .byte LORA_STATE_TX_ACTIVE, 19  # SET_PKT_PROFILE -> TX_ACTIVE, cfg_pkt_shadow
+    .byte LORA_STATE_TX_ACTIVE,  0  # pad             -> TX_ACTIVE, nop
+    .byte LORA_STATE_TX_ACTIVE,  0  # pad             -> TX_ACTIVE, nop
+    .byte LORA_STATE_TX_ACTIVE,  0  # pad             -> TX_ACTIVE, nop
 
     # State 2 (RX_ACTIVE)
-    .byte LORA_STATE_RX_ACTIVE,  7  # DIO0       -> RX_ACTIVE, rx_irq
-    .byte LORA_STATE_RX_ACTIVE,  0  # reserved   -> RX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  0  # CMD_RX     -> RX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  3  # CFG        -> RX_ACTIVE, cfg + rearm RX
-    .byte LORA_STATE_RX_ACTIVE,  2  # RADIO_ON   -> RX_ACTIVE, start_rx
-    .byte LORA_STATE_IDLE,       4  # RADIO_OFF  -> IDLE,      standby
-    .byte LORA_STATE_TX_ACTIVE,  5  # TX_FRAME   -> TX_ACTIVE, tx_frame
-    .byte LORA_STATE_RX_ACTIVE,  8  # SET_PARAMS -> RX_ACTIVE, set_params + rearm
-    .byte LORA_STATE_RX_ACTIVE,  9  # RESET      -> RX_ACTIVE, reset
-    .byte LORA_STATE_RX_ACTIVE,  0  # pad        -> RX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  0  # pad        -> RX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  0  # pad        -> RX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  0  # pad        -> RX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  0  # pad        -> RX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  0  # pad        -> RX_ACTIVE, nop
-    .byte LORA_STATE_RX_ACTIVE,  0  # pad        -> RX_ACTIVE, nop
+    .byte LORA_STATE_RX_ACTIVE,  7  # DIO0            -> RX_ACTIVE, rx_irq
+    .byte LORA_STATE_RX_ACTIVE, 12  # SET_FREQ        -> RX_ACTIVE, cfg_freq_rearm
+    .byte LORA_STATE_RX_ACTIVE,  0  # CMD_RX          -> RX_ACTIVE, nop
+    .byte LORA_STATE_RX_ACTIVE, 14  # SET_TXP         -> RX_ACTIVE, cfg_txp_rearm
+    .byte LORA_STATE_RX_ACTIVE,  2  # RADIO_ON        -> RX_ACTIVE, start_rx
+    .byte LORA_STATE_IDLE,       4  # RADIO_OFF       -> IDLE,      standby
+    .byte LORA_STATE_TX_ACTIVE,  5  # TX_FRAME        -> TX_ACTIVE, tx_frame
+    .byte LORA_STATE_RX_ACTIVE, 21  # SET_PARAMS      -> RX_ACTIVE, set_params_rearm
+    .byte LORA_STATE_RX_ACTIVE,  9  # RESET           -> RX_ACTIVE, reset
+    .byte LORA_STATE_RX_ACTIVE, 10  # FACTORY         -> RX_ACTIVE, factory
+    .byte LORA_STATE_RX_ACTIVE, 16  # SET_IQI         -> RX_ACTIVE, cfg_iqi_rearm
+    .byte LORA_STATE_RX_ACTIVE, 18  # SET_SYNC_WORD   -> RX_ACTIVE, cfg_sync_rearm
+    .byte LORA_STATE_RX_ACTIVE, 20  # SET_PKT_PROFILE -> RX_ACTIVE, cfg_pkt_rearm
+    .byte LORA_STATE_RX_ACTIVE,  0  # pad             -> RX_ACTIVE, nop
+    .byte LORA_STATE_RX_ACTIVE,  0  # pad             -> RX_ACTIVE, nop
+    .byte LORA_STATE_RX_ACTIVE,  0  # pad             -> RX_ACTIVE, nop
 
 lora_fsm_actions:
-    .word lora_action_nop
-    .word lora_action_nop             # reserved no-op action slot
-    .word lora_action_start_rx
-    .word lora_action_cfg
-    .word lora_action_standby
-    .word lora_action_tx_frame
-    .word lora_action_tx_done
-    .word lora_action_rx_irq
-    .word lora_action_set_params
-    .word lora_action_reset
+    .word lora_action_nop              # 0  nop
+    .word lora_action_nop              # 1  reserved
+    .word lora_action_start_rx         # 2  start_rx
+    .word lora_action_nop              # 3  (unused slot — was cfg, now event-specific)
+    .word lora_action_standby          # 4  standby
+    .word lora_action_tx_frame         # 5  tx_frame
+    .word lora_action_tx_done          # 6  tx_done
+    .word lora_action_rx_irq           # 7  rx_irq
+    .word lora_action_set_params_shadow # 8  SET_PARAMS idle/tx
+    .word lora_action_reset            # 9  reset
+    .word lora_action_factory          # 10 factory
+    .word lora_action_cfg_freq_shadow  # 11 SET_FREQ  idle/tx
+    .word lora_action_cfg_freq_rearm   # 12 SET_FREQ  rx
+    .word lora_action_cfg_txp_shadow   # 13 SET_TXP   idle/tx
+    .word lora_action_cfg_txp_rearm    # 14 SET_TXP   rx
+    .word lora_action_cfg_iqi_shadow   # 15 SET_IQI   idle/tx
+    .word lora_action_cfg_iqi_rearm    # 16 SET_IQI   rx
+    .word lora_action_cfg_sync_shadow  # 17 SET_SYNC_WORD  idle/tx
+    .word lora_action_cfg_sync_rearm   # 18 SET_SYNC_WORD  rx
+    .word lora_action_cfg_pkt_shadow   # 19 SET_PKT_PROFILE  idle/tx
+    .word lora_action_cfg_pkt_rearm    # 20 SET_PKT_PROFILE  rx
+    .word lora_action_set_params_rearm # 21 SET_PARAMS rx
 
 # ==============================================================================
 # KERNEL_INIT Section - Auto-Registration Pointer
@@ -330,39 +326,11 @@ lora_init:
     li   a5, LORA_STATE_IDLE
     call fsm_init
 
-    # Reset counters and install default 433.175 MHz/SF12/BW125/CR4/5 profile.
+    # Reset statistics and install factory-default radio config.
     la   t0, lora_fsm_data
     sw   zero, LORA_DATA_TX_COUNT(t0)
     sw   zero, LORA_DATA_RX_COUNT(t0)
-    li   t1, LORA_DEFAULT_FREQ_HZ
-    sw   t1, LORA_DATA_FREQ_HZ(t0)
-    sw   zero, LORA_DATA_FREQ_REG(t0)  # computed by lora_cfg_freq on first apply
-    li   t1, LORA_BW_125_HZ
-    sw   t1, LORA_DATA_BW_HZ(t0)
-    li   t1, LORA_SX_BW_125
-    sw   t1, LORA_DATA_BW_CODE(t0)
-    li   t1, 15                        # 15 dBm TX power (PA_BOOST max for E32)
-    sw   t1, LORA_DATA_TXP(t0)
-    li   t1, 12                        # SF12 default
-    sw   t1, LORA_DATA_SF(t0)
-    li   t1, 5                         # CR 4/5
-    sw   t1, LORA_DATA_CR(t0)
-    sw   zero, LORA_DATA_RADIO_ON(t0)
-    sw   zero, LORA_DATA_TX_PTR(t0)
-    sw   zero, LORA_DATA_TX_LEN(t0)
-    li   t1, 1
-    sw   t1, LORA_DATA_CFG_DIRTY(t0)
-    sw   zero, LORA_DATA_CAL_HZ(t0)
-    li   t1, LORA_DEFAULT_PREAMBLE
-    sw   t1, LORA_DATA_PREAMBLE(t0)
-    sw   zero, LORA_DATA_IQI(t0)
-    li   t1, LORA_SYNC_WORD_PUBLIC
-    sw   t1, LORA_DATA_SYNC_WORD(t0)
-    li   t1, 1
-    sw   t1, LORA_DATA_CRC(t0)
-    li   t1, 2
-    sw   t1, LORA_DATA_LDRO(t0)
-    sw   zero, LORA_DATA_IMPLICIT_LEN(t0)
+    call lora_defaults_apply
 
     # Bring the radio into a known initialized state once at boot.
     call sx1278_init
@@ -428,23 +396,15 @@ lora_dispatch_host_cmd:
     li   t1, EV_FLAGS_MASK
     and  t0, t0, t1                 # opcode from flags
     li   t1, LORA_CMD_SET_FREQ
-    beq  t0, t1, lora_dispatch_cfg
-    li   t1, LORA_CMD_SET_BW
-    beq  t0, t1, lora_dispatch_cfg
+    beq  t0, t1, lora_dispatch_set_freq
     li   t1, LORA_CMD_SET_TXP
-    beq  t0, t1, lora_dispatch_cfg
-    li   t1, LORA_CMD_SET_SF
-    beq  t0, t1, lora_dispatch_cfg
-    li   t1, LORA_CMD_SET_CR
-    beq  t0, t1, lora_dispatch_cfg
-    li   t1, LORA_CMD_SET_PREAMBLE
-    beq  t0, t1, lora_dispatch_cfg
+    beq  t0, t1, lora_dispatch_set_txp
     li   t1, LORA_CMD_SET_IQI
-    beq  t0, t1, lora_dispatch_cfg
+    beq  t0, t1, lora_dispatch_set_iqi
     li   t1, LORA_CMD_SET_SYNC_WORD
-    beq  t0, t1, lora_dispatch_cfg
+    beq  t0, t1, lora_dispatch_set_sync_word
     li   t1, LORA_CMD_SET_PKT_PROFILE
-    beq  t0, t1, lora_dispatch_cfg
+    beq  t0, t1, lora_dispatch_set_pkt_profile
     li   t1, LORA_CMD_SET_PARAMS
     beq  t0, t1, lora_dispatch_set_params
     li   t1, LORA_CMD_SET_STATE
@@ -453,7 +413,39 @@ lora_dispatch_host_cmd:
     beq  t0, t1, lora_dispatch_tx_frame
     li   t1, LORA_CMD_RESET
     beq  t0, t1, lora_dispatch_reset
+    li   t1, LORA_CMD_FACTORY
+    beq  t0, t1, lora_dispatch_factory
     j    lora_dispatch_done
+
+lora_dispatch_set_freq:
+    li   a1, LORA_EV_SET_FREQ
+    lw   a2, 4(sp)
+    li   a3, 0
+    j    lora_dispatch_do_step
+
+lora_dispatch_set_txp:
+    li   a1, LORA_EV_SET_TXP
+    lw   a2, 4(sp)
+    li   a3, 0
+    j    lora_dispatch_do_step
+
+lora_dispatch_set_iqi:
+    li   a1, LORA_EV_SET_IQI
+    lw   a2, 4(sp)
+    li   a3, 0
+    j    lora_dispatch_do_step
+
+lora_dispatch_set_sync_word:
+    li   a1, LORA_EV_SET_SYNC_WORD
+    lw   a2, 4(sp)
+    li   a3, 0
+    j    lora_dispatch_do_step
+
+lora_dispatch_set_pkt_profile:
+    li   a1, LORA_EV_SET_PKT_PROFILE
+    lw   a2, 4(sp)
+    li   a3, 0
+    j    lora_dispatch_do_step
 
 # Real radio reset: hardware reset + full reconfig, then re-arm RX.
 # Routed through fsm_step so reset remains a table-declared FSM transition.
@@ -463,10 +455,10 @@ lora_dispatch_reset:
     li   a3, 0
     j    lora_dispatch_do_step
 
-lora_dispatch_cfg:
-    li   a1, LORA_EV_CFG
-    lw   a2, 4(sp)                  # value
-    mv   a3, t0                     # opcode
+lora_dispatch_factory:
+    li   a1, LORA_EV_FACTORY
+    li   a2, 0
+    li   a3, 0
     j    lora_dispatch_do_step
 
 # Atomic SF+BW+CR+preamble: packed profile travels in data0 as a single event,
@@ -526,46 +518,6 @@ lora_emit_notify:
     lw   ra, 0(sp)
     addi sp, sp, 4
     ret
-
-# ------------------------------------------------------------------------------
-# lora_report_* - push authoritative radio state back to host layer
-# ------------------------------------------------------------------------------
-lora_report_shadow:
-    la   t0, lora_fsm_data
-    add  t0, t0, a1
-    lw   a1, 0(t0)
-    li   a2, 0
-    j    lora_emit_notify
-
-lora_report_freq:
-    li   a0, RADIO_NOTIFY_REPORT_FREQ
-    li   a1, LORA_DATA_FREQ_HZ
-    j    lora_report_shadow
-
-lora_report_bw:
-    li   a0, RADIO_NOTIFY_REPORT_BW
-    li   a1, LORA_DATA_BW_HZ
-    j    lora_report_shadow
-
-lora_report_txp:
-    li   a0, RADIO_NOTIFY_REPORT_TXP
-    li   a1, LORA_DATA_TXP
-    j    lora_report_shadow
-
-lora_report_sf:
-    li   a0, RADIO_NOTIFY_REPORT_SF
-    li   a1, LORA_DATA_SF
-    j    lora_report_shadow
-
-lora_report_cr:
-    li   a0, RADIO_NOTIFY_REPORT_CR
-    li   a1, LORA_DATA_CR
-    j    lora_report_shadow
-
-lora_report_state:
-    li   a0, RADIO_NOTIFY_REPORT_STATE
-    li   a1, LORA_DATA_RADIO_ON
-    j    lora_report_shadow
 
 # ------------------------------------------------------------------------------
 # lora_apply_common - Program SX1278 from current shadow config
@@ -780,7 +732,6 @@ lora_action_start_rx:
     li   t1, 1
     sw   t1, LORA_DATA_RADIO_ON(t0)
     call lora_program_rx
-    call lora_report_state
     lw   ra, 0(sp)
     addi sp, sp, 4
     ret
@@ -792,224 +743,177 @@ lora_action_standby:
     call sx1278_set_standby
     la   t0, lora_fsm_data
     sw   zero, LORA_DATA_RADIO_ON(t0)
-    call lora_report_state
     lw   ra, 0(sp)
     addi sp, sp, 4
     ret
 
-# a0 = FSM pointer (passed by fsm_step to all actions), a1 = config value, a2 = LORA_CMD_SET_* opcode
-lora_action_cfg:
-    addi sp, sp, -12
+# ------------------------------------------------------------------------------
+# cfg shadow/rearm action pairs — actions 11-20
+#
+# shadow (odd IDs 11,13,15,17,19): IDLE and TX_ACTIVE states.
+#   Write value into lora_fsm_data, mark cfg dirty. No hardware call — radio
+#   is either idle or transmitting; the new value takes effect on next apply.
+#
+# rearm (even IDs 12,14,16,18,20): RX_ACTIVE state only.
+#   Same shadow write, then call lora_program_rx to re-arm the receiver with
+#   the updated configuration immediately.
+#
+# All inputs validated by at_fsm before event_enqueue; no bounds checks here.
+# Action signature: a0=fsm_instance (unused), a1=data0 (value), a2=data1 (unused)
+# ------------------------------------------------------------------------------
+
+# --- SET_FREQ (actions 11/12) -------------------------------------------------
+
+lora_action_cfg_freq_rearm:
+    addi sp, sp, -4
     sw   ra, 0(sp)
-    sw   s0, 4(sp)
-    sw   s1, 8(sp)
-    mv   s0, a1                     # value
-    mv   s1, a2                     # opcode
-
-    li   t0, LORA_CMD_SET_FREQ
-    beq  s1, t0, lora_cfg_freq
-    li   t0, LORA_CMD_SET_BW
-    beq  s1, t0, lora_cfg_bw
-    li   t0, LORA_CMD_SET_TXP
-    beq  s1, t0, lora_cfg_txp
-    li   t0, LORA_CMD_SET_SF
-    beq  s1, t0, lora_cfg_sf
-    li   t0, LORA_CMD_SET_CR
-    beq  s1, t0, lora_cfg_cr
-    li   t0, LORA_CMD_SET_PREAMBLE
-    beq  s1, t0, lora_cfg_preamble
-    li   t0, LORA_CMD_SET_IQI
-    beq  s1, t0, lora_cfg_iqi
-    li   t0, LORA_CMD_SET_SYNC_WORD
-    beq  s1, t0, lora_cfg_sync_word
-    li   t0, LORA_CMD_SET_PKT_PROFILE
-    beq  s1, t0, lora_cfg_pkt_profile
-    j    lora_cfg_done
-
-lora_cfg_freq:
-    beqz s0, lora_cfg_report_freq
-    # Accept any frequency: store Hz, clear Frf (recomputed on next apply)
-    la   t2, lora_fsm_data
-    sw   s0, LORA_DATA_FREQ_HZ(t2)
-    sw   zero, LORA_DATA_FREQ_REG(t2)  # 0 = must recompute on next apply
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-lora_cfg_report_freq:
-    call lora_report_freq
-    j    lora_cfg_done
-
-lora_cfg_bw:
-    beqz s0, lora_cfg_report_bw
-    # Map Hz value to SX1278 BW code using lookup table
-    la   t2, lora_bw_hz_table
-    la   t1, lora_bw_code_table
-    li   t0, 0                      # index
-lora_cfg_bw_search:
-    li   a3, 10
-    bgeu t0, a3, lora_cfg_report_bw # not found → report current
-    slli a4, t0, 2
-    add  a4, t2, a4
-    lw   a4, 0(a4)                  # hz from table
-    beq  s0, a4, lora_cfg_bw_found
-    addi t0, t0, 1
-    j    lora_cfg_bw_search
-lora_cfg_bw_found:
-    slli a5, t0, 2
-    add  a5, t1, a5
-    lw   a5, 0(a5)                  # SX code from table
-    la   t2, lora_fsm_data
-    sw   s0, LORA_DATA_BW_HZ(t2)
-    sw   a5, LORA_DATA_BW_CODE(t2)
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-lora_cfg_report_bw:
-    call lora_report_bw
-    j    lora_cfg_done
-
-lora_cfg_txp:
-    li   t0, 22
-    bgtu s0, t0, lora_cfg_report_txp  # reject values > 22 dBm; echo current shadow back to host
-    la   t2, lora_fsm_data
-    sw   s0, LORA_DATA_TXP(t2)
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-lora_cfg_report_txp:
-    call lora_report_txp
-    j    lora_cfg_done
-
-lora_cfg_sf:
-    li   t0, 5
-    bltu s0, t0, lora_cfg_report_sf
-    li   t0, 12
-    bgtu s0, t0, lora_cfg_report_sf
-    la   t2, lora_fsm_data
-    sw   s0, LORA_DATA_SF(t2)
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-lora_cfg_report_sf:
-    call lora_report_sf
-    j    lora_cfg_done
-
-lora_cfg_cr:
-    li   t0, 5
-    bltu s0, t0, lora_cfg_report_cr
-    li   t0, 8
-    bgtu s0, t0, lora_cfg_report_cr
-    la   t2, lora_fsm_data
-    sw   s0, LORA_DATA_CR(t2)
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-lora_cfg_report_cr:
-    call lora_report_cr
-    j    lora_cfg_done
-
-lora_cfg_preamble:
-    beqz s0, lora_cfg_done          # 0 = query (not supported for preamble, ignore)
-    li   t0, 4
-    bltu s0, t0, lora_cfg_done      # min 4 symbols
-    la   t2, lora_fsm_data
-    sw   s0, LORA_DATA_PREAMBLE(t2)
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-
-lora_cfg_iqi:
-    li   t0, 1
-    bgtu s0, t0, lora_cfg_done      # AT layer validates; keep driver-facing bound here too
-    la   t2, lora_fsm_data
-    sw   s0, LORA_DATA_IQI(t2)
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-
-lora_cfg_sync_word:
-    li   t0, 255
-    bgtu s0, t0, lora_cfg_done
-    la   t2, lora_fsm_data
-    sw   s0, LORA_DATA_SYNC_WORD(t2)
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-
-lora_cfg_pkt_profile:
-    la   t2, lora_fsm_data
-    srli t0, s0, LORA_PKT_CRC_SHIFT
-    andi t0, t0, 0x01
-    sw   t0, LORA_DATA_CRC(t2)
-    srli t0, s0, LORA_PKT_LDRO_SHIFT
-    andi t0, t0, 0x03
-    sw   t0, LORA_DATA_LDRO(t2)
-    srli t0, s0, LORA_PKT_LEN_SHIFT
-    andi t0, t0, 0xFF
-    sw   t0, LORA_DATA_IMPLICIT_LEN(t2)
-    li   t0, 1
-    sw   t0, LORA_DATA_CFG_DIRTY(t2)
-    j    lora_cfg_apply_if_rx
-
-lora_cfg_apply_if_rx:
-    lbu  t0, FSM_STATE(a0)         # a0 = FSM pointer (invariant in all actions); read current state
-    li   t1, LORA_STATE_RX_ACTIVE
-    bne  t0, t1, lora_cfg_emit_report
+    la   t0, lora_fsm_data
+    sw   a1, LORA_DATA_FREQ_HZ(t0)
+    sw   zero, LORA_DATA_FREQ_REG(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
     call lora_program_rx
-
-lora_cfg_emit_report:
-    li   t0, LORA_CMD_SET_FREQ
-    beq  s1, t0, lora_cfg_report_freq
-    li   t0, LORA_CMD_SET_BW
-    beq  s1, t0, lora_cfg_report_bw
-    li   t0, LORA_CMD_SET_TXP
-    beq  s1, t0, lora_cfg_report_txp
-    li   t0, LORA_CMD_SET_SF
-    beq  s1, t0, lora_cfg_report_sf
-    li   t0, LORA_CMD_SET_CR
-    beq  s1, t0, lora_cfg_report_cr
-
-lora_cfg_done:
-    lw   s1, 8(sp)
-    lw   s0, 4(sp)
     lw   ra, 0(sp)
-    addi sp, sp, 12
+    addi sp, sp, 4
+    ret
+
+lora_action_cfg_freq_shadow:
+    la   t0, lora_fsm_data
+    sw   a1, LORA_DATA_FREQ_HZ(t0)
+    sw   zero, LORA_DATA_FREQ_REG(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    ret
+
+# --- SET_TXP (actions 13/14) -------------------------------------------------
+
+lora_action_cfg_txp_rearm:
+    addi sp, sp, -4
+    sw   ra, 0(sp)
+    la   t0, lora_fsm_data
+    sw   a1, LORA_DATA_TXP(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    call lora_program_rx
+    lw   ra, 0(sp)
+    addi sp, sp, 4
+    ret
+
+lora_action_cfg_txp_shadow:
+    la   t0, lora_fsm_data
+    sw   a1, LORA_DATA_TXP(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    ret
+
+# --- SET_IQI (actions 15/16) -------------------------------------------------
+
+lora_action_cfg_iqi_rearm:
+    addi sp, sp, -4
+    sw   ra, 0(sp)
+    la   t0, lora_fsm_data
+    sw   a1, LORA_DATA_IQI(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    call lora_program_rx
+    lw   ra, 0(sp)
+    addi sp, sp, 4
+    ret
+
+lora_action_cfg_iqi_shadow:
+    la   t0, lora_fsm_data
+    sw   a1, LORA_DATA_IQI(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    ret
+
+# --- SET_SYNC_WORD (actions 17/18) -------------------------------------------
+
+lora_action_cfg_sync_rearm:
+    addi sp, sp, -4
+    sw   ra, 0(sp)
+    la   t0, lora_fsm_data
+    sw   a1, LORA_DATA_SYNC_WORD(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    call lora_program_rx
+    lw   ra, 0(sp)
+    addi sp, sp, 4
+    ret
+
+lora_action_cfg_sync_shadow:
+    la   t0, lora_fsm_data
+    sw   a1, LORA_DATA_SYNC_WORD(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    ret
+
+# --- SET_PKT_PROFILE (actions 19/20) -----------------------------------------
+# a1 = packed profile: CRC[0] | LDRO[2:1] | implicit_len[10:3]
+
+lora_action_cfg_pkt_rearm:
+    addi sp, sp, -4
+    sw   ra, 0(sp)
+    la   t0, lora_fsm_data
+    srli t1, a1, LORA_PKT_CRC_SHIFT
+    andi t1, t1, 0x01
+    sw   t1, LORA_DATA_CRC(t0)
+    srli t1, a1, LORA_PKT_LDRO_SHIFT
+    andi t1, t1, 0x03
+    sw   t1, LORA_DATA_LDRO(t0)
+    srli t1, a1, LORA_PKT_LEN_SHIFT
+    andi t1, t1, 0xFF
+    sw   t1, LORA_DATA_IMPLICIT_LEN(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    call lora_program_rx
+    lw   ra, 0(sp)
+    addi sp, sp, 4
+    ret
+
+lora_action_cfg_pkt_shadow:
+    la   t0, lora_fsm_data
+    srli t1, a1, LORA_PKT_CRC_SHIFT
+    andi t1, t1, 0x01
+    sw   t1, LORA_DATA_CRC(t0)
+    srli t1, a1, LORA_PKT_LDRO_SHIFT
+    andi t1, t1, 0x03
+    sw   t1, LORA_DATA_LDRO(t0)
+    srli t1, a1, LORA_PKT_LEN_SHIFT
+    andi t1, t1, 0xFF
+    sw   t1, LORA_DATA_IMPLICIT_LEN(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
     ret
 
 # ------------------------------------------------------------------------------
-# lora_action_set_params - apply a full SF+BW+CR+preamble profile atomically
+# lora_action_set_params_shadow / _rearm  (actions 8 / 21)
 # ------------------------------------------------------------------------------
-# a0 = FSM pointer, a1 = packed profile (see LORA_PARAMS_* in events.inc).
-# All fields are pre-validated by at_fsm before the event is enqueued, so this
-# action just unpacks, writes every shadow, marks the config dirty, and (only if
-# the radio is currently in RX) reprograms RX so the new profile takes effect.
-# Single event => no partially-applied configuration is ever observable (#3).
-lora_action_set_params:
-    addi sp, sp, -8
-    sw   ra, 0(sp)
-    sw   s0, 4(sp)
-    lbu  s0, FSM_STATE(a0)         # remember current state for the RX re-arm test
-    la   a0, lora_fsm_data
+# Apply a full SF+BW+CR+preamble profile atomically.
+# a0 = FSM pointer (unused — overwritten), a1 = packed profile.
+# All fields pre-validated by at_fsm; action just unpacks and writes.
+# Single event => no partially-applied config observable (PO-7, PO-8).
+#
+# _shadow (action 8): IDLE and TX_ACTIVE — write shadows, no hardware call.
+# _rearm  (action 21): RX_ACTIVE — same write, then re-arm receiver.
+# State routing is in the FSM table; no FSM_STATE read needed here (Art. 6).
 
-    # SF (bits [3:0])
+lora_action_set_params_rearm:
+    addi sp, sp, -4
+    sw   ra, 0(sp)
+    la   a0, lora_fsm_data
     srli t0, a1, LORA_PARAMS_SF_SHIFT
     andi t0, t0, 0xF
     sw   t0, LORA_DATA_SF(a0)
-
-    # CR host 5..8 (bits [11:8])
     srli t0, a1, LORA_PARAMS_CR_SHIFT
     andi t0, t0, 0xF
     sw   t0, LORA_DATA_CR(a0)
-
-    # Preamble (bits [22:12])
     srli t0, a1, LORA_PARAMS_PRE_SHIFT
     andi t0, t0, 0x7FF
     sw   t0, LORA_DATA_PREAMBLE(a0)
-
-    # BW code index (bits [7:4]) -> Hz + SX1278 register code via lookup tables
     srli t0, a1, LORA_PARAMS_BW_SHIFT
     andi t0, t0, 0xF
-    slli t1, t0, 2                 # index * 4
+    slli t1, t0, 2
     la   t2, lora_bw_hz_table
     add  t2, t2, t1
     lw   t2, 0(t2)
@@ -1018,20 +922,104 @@ lora_action_set_params:
     add  t2, t2, t1
     lw   t2, 0(t2)
     sw   t2, LORA_DATA_BW_CODE(a0)
-
     li   t0, 1
     sw   t0, LORA_DATA_CFG_DIRTY(a0)
+    call lora_program_rx
+    lw   ra, 0(sp)
+    addi sp, sp, 4
+    ret
 
-    # Reprogram RX only if currently listening; otherwise shadow is enough and
-    # apply happens on the next RX entry / TX (matches lora_cfg_apply_if_rx).
-    li   t0, LORA_STATE_RX_ACTIVE
-    bne  s0, t0, lora_set_params_done
+lora_action_set_params_shadow:
+    la   a0, lora_fsm_data
+    srli t0, a1, LORA_PARAMS_SF_SHIFT
+    andi t0, t0, 0xF
+    sw   t0, LORA_DATA_SF(a0)
+    srli t0, a1, LORA_PARAMS_CR_SHIFT
+    andi t0, t0, 0xF
+    sw   t0, LORA_DATA_CR(a0)
+    srli t0, a1, LORA_PARAMS_PRE_SHIFT
+    andi t0, t0, 0x7FF
+    sw   t0, LORA_DATA_PREAMBLE(a0)
+    srli t0, a1, LORA_PARAMS_BW_SHIFT
+    andi t0, t0, 0xF
+    slli t1, t0, 2
+    la   t2, lora_bw_hz_table
+    add  t2, t2, t1
+    lw   t2, 0(t2)
+    sw   t2, LORA_DATA_BW_HZ(a0)
+    la   t2, lora_bw_code_table
+    add  t2, t2, t1
+    lw   t2, 0(t2)
+    sw   t2, LORA_DATA_BW_CODE(a0)
+    li   t0, 1
+    sw   t0, LORA_DATA_CFG_DIRTY(a0)
+    ret
+
+# ------------------------------------------------------------------------------
+# lora_defaults_apply - write factory-default values into lora_fsm_data
+# ------------------------------------------------------------------------------
+# Resets all radio config shadows to factory defaults.
+# Does NOT touch TX_COUNT, RX_COUNT (statistics), RADIO_ON, TX_PTR, TX_LEN
+# (those are set by the caller depending on context).
+# CLOBBERS: t0, t1 (no stack frame — leaf function)
+lora_defaults_apply:
+    la   t0, lora_fsm_data
+    li   t1, LORA_DEFAULT_FREQ_HZ
+    sw   t1, LORA_DATA_FREQ_HZ(t0)
+    sw   zero, LORA_DATA_FREQ_REG(t0)
+    li   t1, LORA_BW_125_HZ
+    sw   t1, LORA_DATA_BW_HZ(t0)
+    li   t1, LORA_SX_BW_125
+    sw   t1, LORA_DATA_BW_CODE(t0)
+    li   t1, 15
+    sw   t1, LORA_DATA_TXP(t0)
+    li   t1, 12
+    sw   t1, LORA_DATA_SF(t0)
+    li   t1, 5
+    sw   t1, LORA_DATA_CR(t0)
+    li   t1, LORA_DEFAULT_PREAMBLE
+    sw   t1, LORA_DATA_PREAMBLE(t0)
+    sw   zero, LORA_DATA_IQI(t0)
+    li   t1, LORA_SYNC_WORD_PUBLIC
+    sw   t1, LORA_DATA_SYNC_WORD(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CRC(t0)
+    li   t1, 2
+    sw   t1, LORA_DATA_LDRO(t0)
+    sw   zero, LORA_DATA_IMPLICIT_LEN(t0)
+    sw   zero, LORA_DATA_CAL_HZ(t0)
+    li   t1, 1
+    sw   t1, LORA_DATA_CFG_DIRTY(t0)
+    ret
+
+# ------------------------------------------------------------------------------
+# lora_action_factory - factory reset: config defaults + hardware reinit + RX re-arm
+# ------------------------------------------------------------------------------
+# Called only through fsm_step via LORA_EV_FACTORY. Resets all config shadows to
+# factory defaults, reinitializes hardware, and re-arms RX. Distinct from
+# lora_action_reset which preserves the current config and only cycles hardware.
+lora_action_factory:
+    addi sp, sp, -4
+    sw   ra, 0(sp)
+
+    call lora_defaults_apply
+
+    la   t0, lora_fsm_data
+    li   t1, 1
+    sw   t1, LORA_DATA_RADIO_ON(t0)
+    sw   zero, LORA_DATA_TX_PTR(t0)
+    sw   zero, LORA_DATA_TX_LEN(t0)
+
+    call sx1278_init
     call lora_program_rx
 
-lora_set_params_done:
-    lw   s0, 4(sp)
+    li   a0, RADIO_NOTIFY_READY
+    li   a1, 0
+    li   a2, 0
+    call lora_emit_notify
+
     lw   ra, 0(sp)
-    addi sp, sp, 8
+    addi sp, sp, 4
     ret
 
 # ------------------------------------------------------------------------------

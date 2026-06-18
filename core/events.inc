@@ -95,18 +95,15 @@
 
 # EV_SOFT_LORA_CMD flags / opcodes
 .equ LORA_CMD_SET_FREQ,         1
-.equ LORA_CMD_SET_BW,           2
 .equ LORA_CMD_SET_TXP,          3
-.equ LORA_CMD_SET_SF,           4
-.equ LORA_CMD_SET_CR,           5
 .equ LORA_CMD_SET_STATE,        6
 .equ LORA_CMD_TX_FRAME,         7
-.equ LORA_CMD_SET_PREAMBLE,     9       # Set LoRa preamble length (symbols)
 .equ LORA_CMD_RESET,           10       # Hardware reset + full reconfig of the radio
 .equ LORA_CMD_SET_PARAMS,      11       # Atomic SF+BW+CR+preamble update (single event)
 .equ LORA_CMD_SET_IQI,         12       # Set LoRa IQ inversion: 0=normal, 1=inverted
 .equ LORA_CMD_SET_SYNC_WORD,   13       # Set SX127x LoRa sync word, 8-bit
 .equ LORA_CMD_SET_PKT_PROFILE, 14       # Atomic CRC+LDRO+implicit length profile
+.equ LORA_CMD_FACTORY,         15       # Full factory reset: config defaults + hardware reinit
 
 # Packed payload layout for LORA_CMD_SET_PARAMS (data0):
 #   bits [3:0]   SF        (6..12)
@@ -136,12 +133,6 @@
 .equ RADIO_NOTIFY_RX_READY,     4
 .equ RADIO_NOTIFY_CRC_ERR,      5
 .equ RADIO_NOTIFY_RX_TIMEOUT,   6
-.equ RADIO_NOTIFY_REPORT_FREQ,  7
-.equ RADIO_NOTIFY_REPORT_BW,    8
-.equ RADIO_NOTIFY_REPORT_TXP,   9
-.equ RADIO_NOTIFY_REPORT_SF,    10
-.equ RADIO_NOTIFY_REPORT_CR,    11
-.equ RADIO_NOTIFY_REPORT_STATE, 12
 .equ RADIO_NOTIFY_READY,        13       # Radio reset complete + RX re-armed
 # ==============================================================================
 # RESERVED VALUES
