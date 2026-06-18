@@ -283,7 +283,14 @@ at_rx_newline:
     add  t1, a0, a1
     sb   zero, 0(t1)
     call at_parse_line
-    j    at_rx_loop
+    # Re-enqueue one RX_PUMP so LoRa FSM events triggered by this command
+    # execute before the next AT line is parsed. Without this, a setter and a
+    # query in the same UART burst are parsed back-to-back in one event pass,
+    # and the query reads stale lora_fsm_data (the LoRa event hasn't run yet).
+    li   a0, ((EV_KIND_SOFT << EV_KIND_SHIFT) | (EV_SOFT_RADIO_RX_PUMP << EV_ID_SHIFT))
+    li   a1, 0
+    li   a2, 0
+    call event_enqueue            # if queue full: bytes remain in ring, ISR will retry
 
 at_rx_done:
     lw   ra, 0(sp)
