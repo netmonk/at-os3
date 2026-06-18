@@ -28,53 +28,57 @@ from test_radio import Radio, ReceivedPacket
 # ---------------------------------------------------------------------------
 # Each entry: (name, freq_hz, sf, bw_khz, cr, preamble, sync_word, iqi, crc, fldro, implicit_len)
 # implicit_len=0 → explicit header; >0 → implicit header with that payload size
+# freq_hz values are relative to BASE_FREQ_DEFAULT; freq_shift is added at runtime.
+
+BASE_FREQ_DEFAULT = 433175000
+F = BASE_FREQ_DEFAULT
 
 PROFILES = [
     # --- SF sweep (BW125, CR4/5) — start at SF9 to warm up radios first ---
-    ("SF9/BW125/CR5",    433175000,  9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
-    ("SF10/BW125/CR5",   433175000, 10, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
-    ("SF11/BW125/CR5",   433175000, 11, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
-    ("SF12/BW125/CR5",   433175000, 12, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF9/BW125/CR5",    F,           9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF10/BW125/CR5",   F,          10, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF11/BW125/CR5",   F,          11, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF12/BW125/CR5",   F,          12, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
     # SF7/SF8 tested after warmup — ESP32 receiver is marginal at these SFs
-    ("SF7/BW125/CR5",    433175000,  7, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
-    ("SF8/BW125/CR5",    433175000,  8, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF7/BW125/CR5",    F,           7, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF8/BW125/CR5",    F,           8, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
     # --- BW sweep (SF9, CR4/5) ---
     # BW41.7 excluded: crystal offset ~15kHz > BW/4 — always fails, hardware limit.
-    ("SF9/BW62.5/CR5",   433175000,  9,  62.5, 5,  8, 0x12, 0, 1, 2,  0),
-    ("SF9/BW250/CR5",    433175000,  9, 250.0, 5,  8, 0x12, 0, 1, 2,  0),
-    ("SF9/BW500/CR5",    433175000,  9, 500.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF9/BW62.5/CR5",   F,           9,  62.5, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF9/BW250/CR5",    F,           9, 250.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF9/BW500/CR5",    F,           9, 500.0, 5,  8, 0x12, 0, 1, 2,  0),
     # --- CR sweep (SF9, BW125) ---
-    ("SF9/BW125/CR6",    433175000,  9, 125.0, 6,  8, 0x12, 0, 1, 2,  0),
-    ("SF9/BW125/CR7",    433175000,  9, 125.0, 7,  8, 0x12, 0, 1, 2,  0),
-    ("SF9/BW125/CR8",    433175000,  9, 125.0, 8,  8, 0x12, 0, 1, 2,  0),
-    # --- Frequency sweep ---
-    ("433.5MHz",         433500000,  9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
-    ("434.0MHz",         434000000,  9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
-    ("435.0MHz",         435000000,  9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
-    ("436.0MHz",         436000000,  9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("SF9/BW125/CR6",    F,           9, 125.0, 6,  8, 0x12, 0, 1, 2,  0),
+    ("SF9/BW125/CR7",    F,           9, 125.0, 7,  8, 0x12, 0, 1, 2,  0),
+    ("SF9/BW125/CR8",    F,           9, 125.0, 8,  8, 0x12, 0, 1, 2,  0),
+    # --- Frequency sweep (offsets from base) ---
+    ("F+325kHz",         F+ 325000,   9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("F+825kHz",         F+ 825000,   9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("F+1825kHz",        F+1825000,   9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("F+2825kHz",        F+2825000,   9, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
     # --- Preamble length ---
-    ("PRE=16",           433175000,  9, 125.0, 5, 16, 0x12, 0, 1, 2,  0),
-    ("PRE=32",           433175000,  9, 125.0, 5, 32, 0x12, 0, 1, 2,  0),
+    ("PRE=16",           F,           9, 125.0, 5, 16, 0x12, 0, 1, 2,  0),
+    ("PRE=32",           F,           9, 125.0, 5, 32, 0x12, 0, 1, 2,  0),
     # --- Sync word ---
-    ("SW=0x34",          433175000,  9, 125.0, 5,  8, 0x34, 0, 1, 2,  0),
+    ("SW=0x34",          F,           9, 125.0, 5,  8, 0x34, 0, 1, 2,  0),
     # 0xAB fails: both nibbles >= 8 is a known SX1262<->SX1276 interop limit
-    ("SW=0x56",          433175000,  9, 125.0, 5,  8, 0x56, 0, 1, 2,  0),
+    ("SW=0x56",          F,           9, 125.0, 5,  8, 0x56, 0, 1, 2,  0),
     # --- IQ inversion ---
-    ("IQI=1",            433175000,  9, 125.0, 5,  8, 0x12, 1, 1, 2,  0),
+    ("IQI=1",            F,           9, 125.0, 5,  8, 0x12, 1, 1, 2,  0),
     # --- CRC off ---
-    ("CRC=0",            433175000,  9, 125.0, 5,  8, 0x12, 0, 0, 2,  0),
+    ("CRC=0",            F,           9, 125.0, 5,  8, 0x12, 0, 0, 2,  0),
     # --- LDRO modes ---
     # LDRO=off tested at SF9/BW125 (symbol time 4ms < 16ms threshold: off is correct)
     # LDRO=force/auto tested at SF12/BW125 (symbol time 32ms > 16ms threshold)
     # BW62.5+SF12 excluded: crystal offset ~15kHz marginal at BW62.5 for long symbols.
-    ("LDRO=off",         433175000,  9, 125.0, 5,  8, 0x12, 0, 1, 0,  0),
-    ("LDRO=force",       433175000, 12, 125.0, 5,  8, 0x12, 0, 1, 1,  0),
-    ("LDRO=auto",        433175000, 12, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
+    ("LDRO=off",         F,           9, 125.0, 5,  8, 0x12, 0, 1, 0,  0),
+    ("LDRO=force",       F,          12, 125.0, 5,  8, 0x12, 0, 1, 1,  0),
+    ("LDRO=auto",        F,          12, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
     # --- Implicit header ---
-    ("IMPLICIT/8B",      433175000,  9, 125.0, 5,  8, 0x12, 0, 1, 2,  8),
-    ("IMPLICIT/16B",     433175000,  9, 125.0, 5,  8, 0x12, 0, 1, 2, 16),
+    ("IMPLICIT/8B",      F,           9, 125.0, 5,  8, 0x12, 0, 1, 2,  8),
+    ("IMPLICIT/16B",     F,           9, 125.0, 5,  8, 0x12, 0, 1, 2, 16),
     # --- Worst-case combo: slow + all options ---
-    ("SF12/BW125/CR8",   433175000, 12, 125.0, 8,  8, 0x12, 0, 1, 1,  0),
+    ("SF12/BW125/CR8",   F,          12, 125.0, 8,  8, 0x12, 0, 1, 1,  0),
 ]
 
 SETTLE_S = 0.08  # set_rx enqueues and returns; actual SPI setup takes a few ms
