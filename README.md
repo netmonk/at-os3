@@ -188,9 +188,8 @@ RADIO=SX1262 ./run.sh              -> build/ch32v003/kernel-sx1262-hse.bin
 CLOCK=HSI RADIO=SX1262 ./run.sh    -> build/ch32v003/kernel-sx1262-hsi.bin
 ```
 
-The SX1262/E22 backend is an initial port: it links, but high-power
-E22-900M30S PA behavior and radio-side packet options still need hardware
-validation.
+The SX1262/E22 backend has been validated on E22-900M22S hardware with
+bidirectional loopback tests against an ESP32 LoRa node.
 
 The script cleans and reuses `build/ch32v003` for each build. Object files and
 `kernel.elf` keep the same names; only the generated binary image is named by

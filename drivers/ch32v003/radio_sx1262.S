@@ -283,7 +283,23 @@ radio_set_rx:
 
 .globl radio_get_packet_status
 radio_get_packet_status:
-    j sx1262_get_packet_status
+    addi sp, sp, -4
+    sw   ra, 0(sp)
+
+    call sx1262_get_packet_status
+
+    # The shared AT formatter currently expects SX127x-style raw RSSI:
+    #   rssi_dbm = -164 + raw
+    # SX126x GetPacketStatus returns RssiPkt with:
+    #   rssi_dbm = -RssiPkt / 2
+    # Convert SX126x raw into the common raw ABI.
+    srli t0, a0, 1
+    li   t1, 164
+    sub  a0, t1, t0
+
+    lw   ra, 0(sp)
+    addi sp, sp, 4
+    ret
 
 .globl radio_get_frequency_error
 radio_get_frequency_error:
