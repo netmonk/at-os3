@@ -102,6 +102,15 @@ class Radio:
         except ValueError:
             return None
 
+    def probe(self) -> int | None:
+        resp = self._cmd_get("AT+PROBE?", "+PROBE=")
+        if resp is None:
+            return None
+        try:
+            return int(resp, 16)
+        except ValueError:
+            return None
+
     def query_band(self) -> int | None:
         resp = self._cmd_get("AT+BAND?", "+BAND=")
         return int(resp) if resp else None
@@ -284,7 +293,7 @@ def main() -> None:
     parser.add_argument("--send", metavar="HEX", help="send hex payload then exit")
     parser.add_argument("--send-text", metavar="TEXT", help="send UTF-8 text payload then exit")
     parser.add_argument("--rx-seconds", type=float, default=0.0, help="listen duration; default is until Ctrl-C")
-    parser.add_argument("--probe", action="store_true", help="read SX1278 RegVersion and exit")
+    parser.add_argument("--probe", action="store_true", help="probe the selected radio backend and exit")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -315,13 +324,30 @@ def main() -> None:
             raise SystemExit(1)
         print("OK")
 
-        ver = radio.read_reg(0x42)
-        if ver == 0x12:
-            print("RegVersion: 0x12  SX1278 SPI link OK")
-        elif ver is None:
-            print("RegVersion: no response")
+        probe = radio.probe()
+        if probe is not None:
+            probe_kind = (probe >> 8) & 0xFF
+            probe_value = probe & 0xFF
+            if probe_kind == 0x12:
+                if probe_value == 0x12:
+                    print("Probe: SX1278 RegVersion=0x12  SPI link OK")
+                else:
+                    print(f"Probe: SX1278 RegVersion=0x{probe_value:02X}  expected 0x12")
+            elif probe_kind == 0x62:
+                if probe_value in (0x00, 0xFF):
+                    print(f"Probe: SX1262 status=0x{probe_value:02X}  suspicious")
+                else:
+                    print(f"Probe: SX1262 status=0x{probe_value:02X}  SPI link OK")
+            else:
+                print(f"Probe: unknown response 0x{probe:04X}")
         else:
-            print(f"RegVersion: 0x{ver:02X}  expected 0x12")
+            ver = radio.read_reg(0x42)
+            if ver == 0x12:
+                print("Probe: legacy SX1278 RegVersion=0x12  SPI link OK")
+            elif ver is None:
+                print("Probe: no response")
+            else:
+                print(f"Probe: legacy RegVersion=0x{ver:02X}  expected 0x12")
         if args.probe:
             return
 

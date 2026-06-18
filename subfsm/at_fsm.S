@@ -91,7 +91,10 @@
 .extern lora_last_rssi_raw
 .extern lora_last_snr_raw
 .extern lora_last_fei_hz
+.extern radio_probe
+.ifdef CONFIG_RADIO_SX1278
 .extern sx1278_read_reg         # diagnostic register read (AT+REG)
+.endif
 
 # ------------------------------------------------------------------------------
 # Constants
@@ -171,6 +174,7 @@ at_str_uid_end:
 
 at_str_crlf:    .ascii "\r\n"
 at_str_comma:   .ascii ","
+at_kw_probeeq:  .ascii "+PROBE="
 
 at_str_err1:    .ascii "+ERR=1\r\n"
 at_str_err1_end:
@@ -590,6 +594,9 @@ at_try_reg:
     li   a2, 3
     call at_match_kw
     beqz a0, at_parse_err4
+.ifndef CONFIG_RADIO_SX1278
+    j    at_parse_err4
+.endif
     addi a0, s0, 3            # expect '=' after "REG"
     li   a1, '='
     call at_expect_char       # a0 = ptr to first hex digit, or 0
@@ -601,7 +608,11 @@ at_try_reg:
     call at_expect_end        # reject trailing junk: "AT+REG=42xx" → +ERR (#1)
     beqz a0, at_parse_err4
     lbu  a0, 16(sp)           # register address
+.ifdef CONFIG_RADIO_SX1278
     call sx1278_read_reg      # a0 = register value (preserves s0/s1)
+.else
+    li   a0, 0
+.endif
     sb   a0, 16(sp)           # store value byte for at_emit_hex
     # emit "+REG="
     la   a0, at_kw_regeq
@@ -842,7 +853,7 @@ at_try_pkt:
     la   a1, at_kw_pkt
     li   a2, 3
     call at_match_kw
-    beqz a0, at_parse_err4
+    beqz a0, at_try_probe
     lbu  t0, 3(s0)
     li   t1, '?'
     beq  t0, t1, at_pkt_query
@@ -897,6 +908,33 @@ at_try_pkt:
     li   a2, 0
     call event_enqueue
     bnez a0, at_parse_err4
+    j    at_parse_ok
+
+at_try_probe:
+    mv   a0, s0
+    la   a1, at_kw_probe
+    li   a2, 6
+    call at_match_kw
+    beqz a0, at_parse_err4
+    addi a0, s0, 6
+    call at_expect_end
+    beqz a0, at_parse_err4
+
+    call radio_probe
+    srli t0, a0, 8
+    sb   t0, 16(sp)
+    sb   a0, 17(sp)
+
+    la   a0, at_kw_probeeq
+    li   a1, 7
+    call at_emit_buf
+    addi a0, sp, 16
+    li   a1, 2
+    call at_emit_hex
+    li   a0, '\r'
+    call console_putc
+    li   a0, '\n'
+    call console_putc
     j    at_parse_ok
 
 at_pkt_query:
@@ -1358,6 +1396,7 @@ at_kw_mode:      .ascii "MODE"
 at_kw_band:      .ascii "BAND"
 at_kw_parameter: .ascii "PARAMETER"
 at_kw_pkt:       .ascii "PKT"
+at_kw_probe:     .ascii "PROBE?"
 at_kw_crfop:     .ascii "CRFOP"
 at_kw_address:   .ascii "ADDRESS"
 at_kw_networkid: .ascii "NETWORKID"

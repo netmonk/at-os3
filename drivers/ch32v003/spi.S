@@ -48,6 +48,8 @@
 .equ SPI_TXE,           (1 << 1)        # TX empty
 .equ SPI_BSY,           (1 << 7)        # Busy
 
+.equ BUSY_TIMEOUT_LOOPS, 500000        # SX1262 BUSY timeout, coarse ~100 ms bound
+
 # Baud rate divisor values (fPCLK/N)
 .equ SPI_BR_DIV2,       0               # fPCLK/2   = 24MHz @ 48MHz
 .equ SPI_BR_DIV4,       1               # fPCLK/4   = 12MHz @ 48MHz
@@ -114,8 +116,17 @@ spi_init:
     sw   t1, 0(t0)
 
     # Default RF switch off until the radio explicitly enters TX or RX mode.
+.ifdef CONFIG_RADIO_SX1278
     li   t1, (LORA_TXEN_LOW | LORA_RXEN_LOW)
     sw   t1, 0(t0)
+    .else
+        .ifdef CONFIG_RADIO_SX1262
+    li   t1, LORA_RXEN_LOW
+    sw   t1, 0(t0)
+        .else
+            .error "No radio module selected: define CONFIG_RADIO_SX1278 or CONFIG_RADIO_SX1262"
+        .endif
+.endif
 
     # --------------------------------------------------------------------------
     # Configure SPI1: Master, software NSS, 8-bit, MSB first
@@ -278,13 +289,33 @@ lora_reset:
 
     ret
 
-# ------------------------------------------------------------------------------
-# lora_wait_busy - No-op stub (SX1278 has no BUSY pin)
-# ------------------------------------------------------------------------------
-# SX1278 drives no BUSY signal. The symbol is kept as an inert service hook for
-# shared low-level code paths that want a bounded wait point.
-
 .globl lora_wait_busy
 lora_wait_busy:
+.ifdef CONFIG_RADIO_SX1278
+    # SX1278 drives no BUSY signal. The symbol is kept as an inert service hook
+    # for shared low-level code paths that want a bounded wait point.
     li   a0, 0
     ret
+    .else
+        .ifdef CONFIG_RADIO_SX1262
+    li   t2, BUSY_TIMEOUT_LOOPS
+    li   t0, GPIOC_BASE + 0x08          # GPIOC_INDR
+
+1:
+    lw   t1, 0(t0)
+    and  t1, t1, LORA_BUSY_MASK
+    beqz t1, lora_wait_busy_ok
+
+    addi t2, t2, -1
+    bnez t2, 1b
+
+    li   a0, -1
+    ret
+
+lora_wait_busy_ok:
+    li   a0, 0
+    ret
+        .else
+            .error "No radio module selected: define CONFIG_RADIO_SX1278 or CONFIG_RADIO_SX1262"
+        .endif
+.endif

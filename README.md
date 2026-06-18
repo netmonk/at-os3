@@ -147,23 +147,23 @@ The firmware is assembled as RV32EC with the `zicsr` extension and the
 From the repository root:
 
 ```bash
-./run.sh
+RADIO=SX1278 ./run.sh
 ```
 
-This builds the HSE clock variant by default. It expects a board with a
-working 24 MHz external crystal.
+This builds the SX1278 radio variant with the HSE clock variant. The HSE build
+expects a board with a working 24 MHz external crystal.
 
 Build output is written to:
 
 ```text
 build/ch32v003/kernel.elf
-build/ch32v003/kernel-hse.bin
+build/ch32v003/kernel-sx1278-hse.bin
 ```
 
 To build the HSI clock variant, use:
 
 ```bash
-CLOCK=HSI ./run.sh
+CLOCK=HSI RADIO=SX1278 ./run.sh
 ```
 
 The HSI build uses the CH32V003 internal 24 MHz RC oscillator.
@@ -171,14 +171,19 @@ The HSI build uses the CH32V003 internal 24 MHz RC oscillator.
 Its binary output is:
 
 ```text
-build/ch32v003/kernel-hsi.bin
+build/ch32v003/kernel-sx1278-hsi.bin
 ```
 
-Valid clock selections are `CLOCK=HSE` and `CLOCK=HSI`.
+Valid clock selections are `CLOCK=HSE` and `CLOCK=HSI`. The radio selection is
+mandatory. Valid radio selections are `RADIO=SX1278` and `RADIO=SX1262`.
+The SX1262/E22 backend is an initial port: it links, but high-power
+E22-900M30S PA behavior and radio-side packet options still need hardware
+validation.
 
 The script cleans and reuses `build/ch32v003` for each build. Object files and
 `kernel.elf` keep the same names; only the generated binary image is named by
-clock variant. The script also prints section sizes and `.kernel_init` entries.
+radio and clock variant. The script also prints section sizes and
+`.kernel_init` entries.
 
 ## Flash
 
@@ -186,10 +191,11 @@ Flash the generated binary with your CH32V003 programming tool. For a local
 `minichlink` setup, the command shape is:
 
 ```bash
-minichlink -w build/ch32v003/kernel-hse.bin flash
+minichlink -w build/ch32v003/kernel-sx1278-hse.bin flash
 ```
 
-Use `build/ch32v003/kernel-hsi.bin` instead if you built with `CLOCK=HSI`.
+Use `build/ch32v003/kernel-sx1278-hsi.bin` instead if you built with
+`CLOCK=HSI RADIO=SX1278`.
 
 `minichlink` is part of the `ch32fun` project:
 
@@ -236,7 +242,7 @@ host-side serial test script for RX/TX checks. It requires Python 3 and
 python3 -m pip install pyserial
 ```
 
-Probe the modem and SX1278 SPI link:
+Probe the modem and radio SPI link:
 
 ```bash
 python3 tools/test_radio.py /dev/ttyACM0 --probe

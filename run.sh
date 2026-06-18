@@ -17,21 +17,55 @@
 set -e
 
 CLOCK=${CLOCK:-HSE}
+RADIO=${RADIO:-}
 
 case "$CLOCK" in
   HSE)
     CLOCK_DEF="--defsym CONFIG_CLOCK_HSE=1"
-    BIN_IMAGE=kernel-hse.bin
     ;;
   HSI)
     CLOCK_DEF="--defsym CONFIG_CLOCK_HSI=1"
-    BIN_IMAGE=kernel-hsi.bin
     ;;
   *)
-    echo "Usage: CLOCK=HSE|HSI ./run.sh"
+    echo "Usage: CLOCK=HSE|HSI RADIO=SX1278|SX1262 ./run.sh"
     exit 1
     ;;
 esac
+
+case "$RADIO" in
+  SX1278)
+    RADIO_DEF="--defsym CONFIG_RADIO_SX1278=1"
+    RADIO_DRIVER=drivers/ch32v003/sx1278.S
+    RADIO_BACKEND=drivers/ch32v003/radio_sx1278.S
+    RADIO_DRIVER_OBJ=drv_sx1278.o
+    RADIO_BACKEND_OBJ=radio_sx1278.o
+    RADIO_IMAGE=sx1278
+    ;;
+  SX1262)
+    RADIO_DEF="--defsym CONFIG_RADIO_SX1262=1"
+    RADIO_DRIVER=drivers/ch32v003/sx1262.S
+    RADIO_BACKEND=drivers/ch32v003/radio_sx1262.S
+    RADIO_DRIVER_OBJ=drv_sx1262.o
+    RADIO_BACKEND_OBJ=radio_sx1262.o
+    RADIO_IMAGE=sx1262
+    ;;
+  *)
+    echo "Usage: CLOCK=HSE|HSI RADIO=SX1278|SX1262 ./run.sh"
+    exit 1
+    ;;
+esac
+
+BIN_IMAGE=kernel-${RADIO_IMAGE}-${CLOCK,,}.bin
+
+if [ ! -f "$RADIO_DRIVER" ]; then
+    echo "Radio driver not found: $RADIO_DRIVER"
+    exit 1
+fi
+
+if [ ! -f "$RADIO_BACKEND" ]; then
+    echo "Radio backend not implemented yet: $RADIO_BACKEND"
+    exit 1
+fi
 
 BUILD_DIR=build/ch32v003
 mkdir -p $BUILD_DIR
@@ -40,7 +74,7 @@ rm -f $BUILD_DIR/*.o $BUILD_DIR/*.elf $BUILD_DIR/*.bin
 # ------------------------------------------------------------------------------
 # Assembler flags for CH32V003 (RV32EC with Zicsr extension)
 # ------------------------------------------------------------------------------
-AS_FLAGS="-g -mabi=ilp32e -march=rv32ec_zicsr --warn --fatal-warnings $CLOCK_DEF"
+AS_FLAGS="-g -mabi=ilp32e -march=rv32ec_zicsr --warn --fatal-warnings $CLOCK_DEF $RADIO_DEF"
 
 # ------------------------------------------------------------------------------
 # Assemble core modules (hardware-agnostic)
@@ -65,7 +99,8 @@ riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/vector-ch32v003.o  drivers/ch32v0
 riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/flash.o            drivers/ch32v003/flash.S
 riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/mcu.o              drivers/ch32v003/mcu.S
 riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/drv_spi.o          drivers/ch32v003/spi.S
-riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/drv_sx1278.o       drivers/ch32v003/sx1278.S
+riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/$RADIO_DRIVER_OBJ  $RADIO_DRIVER
+riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/$RADIO_BACKEND_OBJ $RADIO_BACKEND
 riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/drv_led.o          drivers/ch32v003/led.S
 riscv32-unknown-elf-as $AS_FLAGS -o $BUILD_DIR/drv_systick.o      drivers/ch32v003/systick.S
 
@@ -101,7 +136,8 @@ riscv32-unknown-elf-ld -g -T link/ch32v003.ld \
     $BUILD_DIR/drv_exti.o \
     $BUILD_DIR/drv_uart.o \
     $BUILD_DIR/drv_spi.o \
-    $BUILD_DIR/drv_sx1278.o \
+    $BUILD_DIR/$RADIO_DRIVER_OBJ \
+    $BUILD_DIR/$RADIO_BACKEND_OBJ \
     $BUILD_DIR/drv_led.o \
     $BUILD_DIR/drv_systick.o \
     $BUILD_DIR/lora_fsm.o \

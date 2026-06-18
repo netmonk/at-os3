@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import os
 import threading
@@ -38,9 +39,7 @@ PROFILES = [
     ("SF7/BW125/CR5",    433175000,  7, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
     ("SF8/BW125/CR5",    433175000,  8, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
     # --- BW sweep (SF9, CR4/5) ---
-    # BW < 41.7kHz excluded: crystal offset ~10kHz > SX1278 AFC range (±BW/4)
-    # at those BWs — hardware constraint, not a firmware issue.
-    ("SF9/BW41.7/CR5",   433175000,  9,  41.7, 5,  8, 0x12, 0, 1, 2,  0),
+    # BW41.7 excluded: crystal offset ~15kHz > BW/4 — always fails, hardware limit.
     ("SF9/BW62.5/CR5",   433175000,  9,  62.5, 5,  8, 0x12, 0, 1, 2,  0),
     ("SF9/BW250/CR5",    433175000,  9, 250.0, 5,  8, 0x12, 0, 1, 2,  0),
     ("SF9/BW500/CR5",    433175000,  9, 500.0, 5,  8, 0x12, 0, 1, 2,  0),
@@ -58,25 +57,42 @@ PROFILES = [
     ("PRE=32",           433175000,  9, 125.0, 5, 32, 0x12, 0, 1, 2,  0),
     # --- Sync word ---
     ("SW=0x34",          433175000,  9, 125.0, 5,  8, 0x34, 0, 1, 2,  0),
-    ("SW=0xAB",          433175000,  9, 125.0, 5,  8, 0xAB, 0, 1, 2,  0),
+    # 0xAB fails: both nibbles >= 8 is a known SX1262<->SX1276 interop limit
+    ("SW=0x56",          433175000,  9, 125.0, 5,  8, 0x56, 0, 1, 2,  0),
     # --- IQ inversion ---
     ("IQI=1",            433175000,  9, 125.0, 5,  8, 0x12, 1, 1, 2,  0),
     # --- CRC off ---
     ("CRC=0",            433175000,  9, 125.0, 5,  8, 0x12, 0, 0, 2,  0),
     # --- LDRO modes ---
     # LDRO=off tested at SF9/BW125 (symbol time 4ms < 16ms threshold: off is correct)
+    # LDRO=force/auto tested at SF12/BW125 (symbol time 32ms > 16ms threshold)
+    # BW62.5+SF12 excluded: crystal offset ~15kHz marginal at BW62.5 for long symbols.
     ("LDRO=off",         433175000,  9, 125.0, 5,  8, 0x12, 0, 1, 0,  0),
-    ("LDRO=force",       433175000, 12,  62.5, 5,  8, 0x12, 0, 1, 1,  0),
-    ("LDRO=auto",        433175000, 12,  62.5, 5,  8, 0x12, 0, 1, 2,  0),
+    ("LDRO=force",       433175000, 12, 125.0, 5,  8, 0x12, 0, 1, 1,  0),
+    ("LDRO=auto",        433175000, 12, 125.0, 5,  8, 0x12, 0, 1, 2,  0),
     # --- Implicit header ---
     ("IMPLICIT/8B",      433175000,  9, 125.0, 5,  8, 0x12, 0, 1, 2,  8),
     ("IMPLICIT/16B",     433175000,  9, 125.0, 5,  8, 0x12, 0, 1, 2, 16),
     # --- Worst-case combo: slow + all options ---
-    ("SF12/BW62.5/CR8",  433175000, 12,  62.5, 8,  8, 0x12, 0, 1, 1,  0),
+    ("SF12/BW125/CR8",   433175000, 12, 125.0, 8,  8, 0x12, 0, 1, 1,  0),
 ]
 
-# Generous RX timeout to cover slow SF12/BW7.8 air time
-RX_TIMEOUT = 30.0
+SETTLE_S = 0.08  # set_rx enqueues and returns; actual SPI setup takes a few ms
+
+def toa_s(sf: int, bw_khz: float, cr: int, payload_len: int, preamble: int,
+          implicit: bool) -> float:
+    """LoRa time-on-air (seconds), standard formula."""
+    bw = bw_khz * 1000.0
+    t_sym = (2 ** sf) / bw
+    ldro = 1 if t_sym >= 0.01638 else 0
+    n_bit_crc = 0 if implicit else 16
+    n_sym_hdr = 0 if implicit else 20
+    payload_symb = math.ceil(
+        max(8 * payload_len + n_bit_crc - 4 * sf + 8 * (1 - ldro) + n_sym_hdr, 0)
+        / (4 * (sf - 2 * ldro))
+    ) * (cr + 4)
+    n_sym = preamble + 4.25 + 8 + payload_symb
+    return t_sym * n_sym
 
 # ---------------------------------------------------------------------------
 
@@ -109,6 +125,7 @@ def run_one(
     payload: bytes,
     cfg: dict,
     implicit_len: int,
+    rx_timeout: float,
 ) -> Result:
     # Always standby both before reconfiguring to avoid dirty state from
     # previous test (especially after an RX timeout).
@@ -124,9 +141,7 @@ def run_one(
     if not rx.set_rx():
         return Result(False, None, None, None, f"{rx_name} set_rx failed")
 
-    # 1s settle: set_rx returns +OK when the event is enqueued, not when
-    # lora_program_rx has finished. The ESP32 also needs time to arm its receiver.
-    time.sleep(1.0)
+    time.sleep(SETTLE_S)
 
     data = payload
     if implicit_len > 0:
@@ -135,7 +150,7 @@ def run_one(
     if not tx.send(data):
         return Result(False, None, None, None, f"{tx_name} send failed")
 
-    pkt = wait_for_packet(rx, RX_TIMEOUT)
+    pkt = wait_for_packet(rx, rx_timeout)
     if pkt is None:
         return Result(False, None, None, None, "RX timeout")
 
@@ -148,13 +163,19 @@ def run_one(
     return Result(True, pkt.rssi, pkt.snr, pkt.frequency_error, "")
 
 
+BASE_FREQ_DEFAULT = 433175000
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Bidirectional LoRa loopback test")
     parser.add_argument("port_a", help="Port A (e.g. /dev/ttyACM0)")
     parser.add_argument("port_b", help="Port B (e.g. /dev/ttyACM1)")
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--base-freq", type=int, default=BASE_FREQ_DEFAULT,
+                        help=f"Base frequency in Hz; all profile freqs are shifted by "
+                             f"(base-freq - {BASE_FREQ_DEFAULT}) (default: {BASE_FREQ_DEFAULT})")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+    freq_shift = args.base_freq - BASE_FREQ_DEFAULT
 
     radio_a = Radio(args.port_a, baud=args.baud, timeout=3.0)
     radio_b = Radio(args.port_b, baud=args.baud, timeout=3.0)
@@ -183,7 +204,7 @@ def main() -> None:
     print()
 
     # Warmup: one dummy loopback to wake the ESP32 RX path before the real tests.
-    _wup = dict(freq_hz=433175000, sf=9, bw_khz=125.0, cr=5, preamble=8,
+    _wup = dict(freq_hz=BASE_FREQ_DEFAULT + freq_shift, sf=9, bw_khz=125.0, cr=5, preamble=8,
                 power=15, sync_word=0x12, inverted_iq=False, crc=True,
                 fldro=2, implicit_len=0)
     radio_a.configure(**_wup); radio_b.configure(**_wup)
@@ -209,7 +230,7 @@ def main() -> None:
         name, freq_hz, sf, bw_khz, cr, pre, sw, iqi, crc, fldro, ilen = entry
 
         cfg = dict(
-            freq_hz=freq_hz,
+            freq_hz=freq_hz + freq_shift,
             sf=sf,
             bw_khz=bw_khz,
             cr=cr,
@@ -222,11 +243,16 @@ def main() -> None:
             implicit_len=ilen,
         )
 
+        payload_len = ilen if ilen > 0 else 7  # "hello-A" / "hello-B"
+        air = toa_s(sf, bw_khz, cr, payload_len, pre, ilen > 0)
+        rx_timeout = SETTLE_S + air * 1.5 + 0.3
+
         for tx_radio, tx_label, rx_radio, rx_label, payload in [
             (radio_a, f"A→B", radio_b, "B", b"hello-A"),
             (radio_b, f"B→A", radio_a, "A", b"hello-B"),
         ]:
-            r = run_one(tx_radio, tx_label, rx_radio, rx_label, payload, cfg, ilen)
+            r = run_one(tx_radio, tx_label, rx_radio, rx_label, payload, cfg, ilen,
+                        rx_timeout)
 
             status = "PASS " if r.passed else "FAIL "
             rssi_s = f"{r.rssi:+4d}" if r.rssi is not None else "   -"

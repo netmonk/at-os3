@@ -63,8 +63,8 @@
 .equ LORA_EVENT_BITS,      4           # log2(16)
 
 # SX1278 constants local to this FSM (RegIrqFlags 0x12, 8-bit)
-.equ SX_STDBY_RC,          0x00        # kept for ABI compat, ignored by sx1278_set_standby
-.equ SX_STDBY_XOSC,        0x01        # kept for ABI compat, ignored by sx1278_set_standby
+.equ SX_STDBY_RC,          0x00        # kept for ABI compat, ignored by radio_set_standby
+.equ SX_STDBY_XOSC,        0x01        # kept for ABI compat, ignored by radio_set_standby
 .equ SX_IRQ_TX_DONE,       (1 << 3)    # bit 3 = TxDone
 .equ SX_IRQ_RX_DONE,       (1 << 6)    # bit 6 = RxDone
 .equ SX_IRQ_CRC_ERR,       (1 << 5)    # bit 5 = PayloadCrcError
@@ -128,26 +128,26 @@
 .extern register_activity
 .extern event_enqueue
 .extern timer_arm_delta
-.extern sx1278_init
-.extern sx1278_set_sync_word
-.extern sx1278_set_iq_invert
-.extern sx1278_set_frequency
-.extern sx1278_config_lora
-.extern sx1278_set_tx_power
-.extern sx1278_set_dio_irq
-.extern sx1278_set_packet_params
-.extern sx1278_set_buffer_base
-.extern sx1278_write_buffer
-.extern sx1278_set_tx
-.extern sx1278_set_sleep
-.extern sx1278_get_irq_status
-.extern sx1278_clear_irq
-.extern sx1278_set_standby
-.extern sx1278_get_rx_buffer_status
-.extern sx1278_read_buffer
-.extern sx1278_set_rx
-.extern sx1278_get_packet_status
-.extern sx1278_get_frequency_error
+.extern radio_init
+.extern radio_set_sync_word
+.extern radio_set_iq_invert
+.extern radio_set_frequency
+.extern radio_config_lora
+.extern radio_set_tx_power
+.extern radio_set_dio_irq
+.extern radio_set_packet_params
+.extern radio_set_buffer_base
+.extern radio_write_buffer
+.extern radio_set_tx
+.extern radio_set_sleep
+.extern radio_get_irq_status
+.extern radio_clear_irq
+.extern radio_set_standby
+.extern radio_get_rx_buffer_status
+.extern radio_read_buffer
+.extern radio_set_rx
+.extern radio_get_packet_status
+.extern radio_get_frequency_error
 .extern led_activity_on
 .extern led_activity_off
 
@@ -333,7 +333,7 @@ lora_init:
     call lora_defaults_apply
 
     # Bring the radio into a known initialized state once at boot.
-    call sx1278_init
+    call radio_init
 
     li   a0, EV_KIND_IRQ
     li   a1, EV_IRQ_LORA_DIO0
@@ -531,10 +531,10 @@ lora_apply_common:
     lw   t0, LORA_DATA_CFG_DIRTY(s0)
     beqz t0, lora_apply_common_done
 
-    call sx1278_set_sleep
+    call radio_set_sleep
 
     lw   a0, LORA_DATA_SYNC_WORD(s0)
-    call sx1278_set_sync_word
+    call radio_set_sync_word
 
     # Compute Frf from freq_hz if FREQ_REG is 0 (first apply or frequency changed)
     lw   a0, LORA_DATA_FREQ_REG(s0)
@@ -544,7 +544,7 @@ lora_apply_common:
     sw   a0, LORA_DATA_FREQ_REG(s0)
 lora_apply_common_freq_ready:
     lw   a0, LORA_DATA_FREQ_REG(s0)
-    call sx1278_set_frequency
+    call radio_set_frequency
 
     lw   a0, LORA_DATA_SF(s0)
     lw   a1, LORA_DATA_BW_CODE(s0)
@@ -553,13 +553,13 @@ lora_apply_common_freq_ready:
     slli a2, a2, 1                  # SX1278: CR in bits[3:1] -> multiply by 2: 0x02..0x08
     lw   a3, LORA_DATA_CRC(s0)
     lw   a4, LORA_DATA_LDRO(s0)
-    call sx1278_config_lora
+    call radio_config_lora
 
     lw   a0, LORA_DATA_IQI(s0)
-    call sx1278_set_iq_invert
+    call radio_set_iq_invert
 
     lw   a0, LORA_DATA_TXP(s0)
-    call sx1278_set_tx_power
+    call radio_set_tx_power
     sw   zero, LORA_DATA_CFG_DIRTY(s0)
 
 lora_apply_common_done:
@@ -577,10 +577,10 @@ lora_program_rx:
 
     call lora_apply_common
     li   a0, 0                      # RX mode: DIO0 = RxDone
-    call sx1278_set_dio_irq
+    call radio_set_dio_irq
     # RegPayloadLength and RegModemConfig1 header mode are radio parameters;
     # enter SLEEP before touching them, even on RX re-arm with unchanged values.
-    call sx1278_set_sleep
+    call radio_set_sleep
     la   t0, lora_fsm_data
     lw   a0, LORA_DATA_PREAMBLE(t0)
     lw   a1, LORA_DATA_IMPLICIT_LEN(t0)
@@ -588,12 +588,14 @@ lora_program_rx:
     bnez a1, lora_program_rx_len_ready
     li   a1, 255
 lora_program_rx_len_ready:
-    call sx1278_set_packet_params
+    lw   a3, LORA_DATA_CRC(t0)
+    lw   a4, LORA_DATA_IQI(t0)
+    call radio_set_packet_params
     li   a0, 0x80                   # TX base = 0x80
     li   a1, 0x00                   # RX base = 0x00
-    call sx1278_set_buffer_base
+    call radio_set_buffer_base
     li   a0, 0                      # arg ignored by SX1278 (always RXCONTINUOUS)
-    call sx1278_set_rx
+    call radio_set_rx
 
     lw   ra, 0(sp)
     addi sp, sp, 4
@@ -637,28 +639,30 @@ lora_start_tx_packet_len_ok:
     lw   s0, LORA_DATA_TX_PTR(t0)
 
     li   a0, SX_STDBY_XOSC          # arg ignored by SX1278 (always LoRa STDBY)
-    call sx1278_set_standby
+    call radio_set_standby
 
     call lora_apply_common
     li   a0, 1                      # TX mode: DIO0 = TxDone
-    call sx1278_set_dio_irq
+    call radio_set_dio_irq
     # TX packet length updates RegPayloadLength; keep the same sleep-before-
     # radio-parameter-write rule as RX configuration.
-    call sx1278_set_sleep
+    call radio_set_sleep
     la   t0, lora_fsm_data
     lw   a0, LORA_DATA_PREAMBLE(t0)
     lw   a1, 12(sp)                 # packet length = payload bytes
     lw   t1, LORA_DATA_IMPLICIT_LEN(t0)
     sltu a2, zero, t1               # implicit if configured len > 0
-    call sx1278_set_packet_params
+    lw   a3, LORA_DATA_CRC(t0)
+    lw   a4, LORA_DATA_IQI(t0)
+    call radio_set_packet_params
     li   a0, 0x80                   # TX base = 0x80
     li   a1, 0x00                   # RX base = 0x00
-    call sx1278_set_buffer_base
+    call radio_set_buffer_base
     mv   a0, s0                     # payload ptr
     lw   a1, 12(sp)                 # payload length
-    call sx1278_write_buffer        # raw write, no header prepended
+    call radio_write_buffer        # raw write, no header prepended
     li   a0, 0                      # arg ignored by SX1278
-    call sx1278_set_tx
+    call radio_set_tx
 
 lora_start_tx_packet_done:
     lw   s1, 8(sp)
@@ -740,7 +744,7 @@ lora_action_standby:
     addi sp, sp, -4
     sw   ra, 0(sp)
     li   a0, SX_STDBY_RC
-    call sx1278_set_standby
+    call radio_set_standby
     la   t0, lora_fsm_data
     sw   zero, LORA_DATA_RADIO_ON(t0)
     lw   ra, 0(sp)
@@ -1010,7 +1014,7 @@ lora_action_factory:
     sw   zero, LORA_DATA_TX_PTR(t0)
     sw   zero, LORA_DATA_TX_LEN(t0)
 
-    call sx1278_init
+    call radio_init
     call lora_program_rx
 
     li   a0, RADIO_NOTIFY_READY
@@ -1032,7 +1036,7 @@ lora_action_reset:
     addi sp, sp, -4
     sw   ra, 0(sp)
 
-    call sx1278_init
+    call radio_init
 
     la   t0, lora_fsm_data
     li   t1, 1
@@ -1078,12 +1082,12 @@ lora_action_tx_done:
     sw   ra, 0(sp)
     sw   s0, 4(sp)
 
-    call sx1278_get_irq_status
+    call radio_get_irq_status
     mv   s0, a0
     la   t0, lora_last_irq_flags
     sw   s0, 0(t0)
     mv   a0, s0
-    call sx1278_clear_irq
+    call radio_clear_irq
 
     andi t0, s0, SX_IRQ_TX_DONE
     bnez t0, lora_tx_done_confirmed
@@ -1144,10 +1148,10 @@ lora_action_rx_irq:
     sw   s0,  4(sp)
     sw   s1,  8(sp)
 
-    call sx1278_get_irq_status
+    call radio_get_irq_status
     mv   s0, a0                     # s0 = IRQ flags
     mv   a0, s0
-    call sx1278_clear_irq
+    call radio_clear_irq
 
     # CRC error takes priority (SX1278 may set both RxDone+CrcError)
     andi t0, s0, SX_IRQ_CRC_ERR
@@ -1158,7 +1162,7 @@ lora_action_rx_irq:
     beqz t0, lora_rx_reenter        # spurious or timeout -> just re-arm
 
     # Get payload length and FIFO start address
-    call sx1278_get_rx_buffer_status
+    call radio_get_rx_buffer_status
     mv   s1, a0                     # s1 = payload length (bytes)
     sw   a1, 12(sp)                 # save fifo_start_addr
 
@@ -1171,11 +1175,11 @@ lora_action_rx_irq:
 lora_rx_len_ok:
 
     # Read RSSI and SNR before FIFO access
-    call sx1278_get_packet_status
+    call radio_get_packet_status
     sw   a0, 16(sp)                 # rssi_raw
     sw   a1, 20(sp)                 # snr_raw
 
-    call sx1278_get_frequency_error # a0 = signed FEI raw
+    call radio_get_frequency_error # a0 = signed FEI raw
     la   t0, lora_fsm_data
     lw   a1, LORA_DATA_BW_HZ(t0)
     call lora_fei_raw_to_hz
@@ -1186,7 +1190,7 @@ lora_rx_len_ok:
     la   a0, lora_rx_buffer
     lw   a1, 12(sp)
     mv   a2, s1
-    call sx1278_read_buffer
+    call radio_read_buffer
 
     # Store metrics
     lw   t0, 16(sp)
@@ -1226,7 +1230,7 @@ lora_rx_crc_err:
 
 lora_rx_reenter:
     li   a0, 0
-    call sx1278_set_rx
+    call radio_set_rx
 
     lw   s1,  8(sp)
     lw   s0,  4(sp)
