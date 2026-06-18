@@ -150,8 +150,8 @@ From the repository root:
 RADIO=SX1278 ./run.sh
 ```
 
-This builds the SX1278 radio variant with the HSE clock variant. The HSE build
-expects a board with a working 24 MHz external crystal.
+This builds the SX1278 radio variant with the HSE clock variant. `RADIO` is
+mandatory; there is no default radio target. `CLOCK` defaults to `HSE`.
 
 Build output is written to:
 
@@ -160,22 +160,29 @@ build/ch32v003/kernel.elf
 build/ch32v003/kernel-sx1278-hse.bin
 ```
 
-To build the HSI clock variant, use:
-
-```bash
-CLOCK=HSI RADIO=SX1278 ./run.sh
-```
-
-The HSI build uses the CH32V003 internal 24 MHz RC oscillator.
-
-Its binary output is:
+Valid radio selections are:
 
 ```text
-build/ch32v003/kernel-sx1278-hsi.bin
+RADIO=SX1278    SX1278 / E32-style modules
+RADIO=SX1262    SX1262 / E22-style modules
 ```
 
-Valid clock selections are `CLOCK=HSE` and `CLOCK=HSI`. The radio selection is
-mandatory. Valid radio selections are `RADIO=SX1278` and `RADIO=SX1262`.
+Valid clock selections are:
+
+```text
+CLOCK=HSE       24 MHz external crystal, default
+CLOCK=HSI       CH32V003 internal 24 MHz RC oscillator
+```
+
+Common build commands:
+
+```text
+RADIO=SX1278 ./run.sh              -> build/ch32v003/kernel-sx1278-hse.bin
+CLOCK=HSI RADIO=SX1278 ./run.sh    -> build/ch32v003/kernel-sx1278-hsi.bin
+RADIO=SX1262 ./run.sh              -> build/ch32v003/kernel-sx1262-hse.bin
+CLOCK=HSI RADIO=SX1262 ./run.sh    -> build/ch32v003/kernel-sx1262-hsi.bin
+```
+
 The SX1262/E22 backend is an initial port: it links, but high-power
 E22-900M30S PA behavior and radio-side packet options still need hardware
 validation.
@@ -194,8 +201,8 @@ Flash the generated binary with your CH32V003 programming tool. For a local
 minichlink -w build/ch32v003/kernel-sx1278-hse.bin flash
 ```
 
-Use `build/ch32v003/kernel-sx1278-hsi.bin` instead if you built with
-`CLOCK=HSI RADIO=SX1278`.
+Use the binary matching the build command, for example
+`build/ch32v003/kernel-sx1262-hse.bin` after `RADIO=SX1262 ./run.sh`.
 
 `minichlink` is part of the `ch32fun` project:
 
