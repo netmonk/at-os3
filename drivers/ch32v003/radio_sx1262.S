@@ -11,8 +11,7 @@
 #   - Frequency error is reported as 0: SX1262 has no direct SX1278 FEI register.
 #   - Packet params currently follow the imported driver behavior: explicit
 #     header, CRC on, standard IQ.
-#   - PA constants are inherited from os3-rnode and target +22 dBm SX1262 setup;
-#     E22-900M30S high-power behavior still needs hardware validation.
+#   - PA constants are inherited from os3-rnode and target +22 dBm SX1262 setup.
 #
 # ==============================================================================
 
