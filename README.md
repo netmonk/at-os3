@@ -1,7 +1,7 @@
 # at-os3
 
 `at-os3` is a small event-driven AT modem firmware for CH32V003 boards driving
-an SX1278-compatible LoRa radio.
+SX1278/E32-style or SX1262/E22-style LoRa modules.
 
 The firmware exposes a UART AT command interface and keeps the radio control
 path deterministic:
@@ -10,13 +10,13 @@ path deterministic:
 interrupt -> event queue -> event loop -> FSM / handler
 ```
 
-The current target is a CH32V003 wired to an SX1278 or Ebyte E32-style LoRa
-module. It is used as a raw LoRa modem by a Linux host. 
+The firmware is built for one radio backend at a time with `RADIO=SX1278` or
+`RADIO=SX1262`. It is used as a raw LoRa modem by a Linux host.
 
 ## Prototype Hardware
 
-Early CH32V003 + SX1278/Ebyte-module prototype wired to a quarter-wave ground
-plane antenna:
+Early CH32V003 + Ebyte-module prototype wired to a quarter-wave ground plane
+antenna:
 
 ![at-os3 CH32V003 LoRa modem prototype](docs/images/hardware-hat-prototype.jpg)
 
@@ -40,8 +40,9 @@ backend modem commands, computes Doppler correction from TLE/TLX data, and
 publishes received packets back as TinyGS telemetry.
 
 `at-os3` stays next to the radio hardware. It only handles the deterministic
-modem side: UART AT commands, SX1278 register programming, LoRa RX/TX,
-interrupt handling, and packet reports with RSSI/SNR/frequency error.
+modem side: UART AT commands, radio driver calls, LoRa RX/TX, interrupt
+handling, and packet reports with RSSI/SNR/frequency error where the selected
+radio backend supports it.
 
 This split keeps TLS, MQTT credentials, logs, and satellite scheduling on
 Linux, while the CH32V003 remains a small replaceable LoRa front end close to
@@ -77,7 +78,7 @@ This is why the code is split into:
 | Directory | Role |
 |---|---|
 | `core/` | event queue, event loop, FSM engine, timer, console service |
-| `drivers/ch32v003/` | CH32V003 peripherals, UART, SPI, EXTI, SX1278 register access |
+| `drivers/ch32v003/` | CH32V003 peripherals, UART, SPI, EXTI, radio drivers and radio backends |
 | `subfsm/` | table-driven domain FSMs, including the AT parser and LoRa FSM |
 | `handlers/` | stateless event reactions |
 
@@ -87,10 +88,11 @@ The project constitution is in [CONSTITUTION.md](CONSTITUTION.md).
 
 - UART AT command interface at 115200 8N1
 - Raw LoRa RX/TX
-- SX1278 register-level control
+- Compile-time radio backend selection: `SX1278` or `SX1262`
 - Frequency, SF, bandwidth, coding rate, preamble, sync word, IQ inversion,
   CRC, LDRO, and implicit payload length configuration
-- RX packet reports with RSSI, SNR, and frequency error estimate
+- RX packet reports with RSSI and SNR; SX1278 builds also report frequency
+  error estimate
 - Event-driven interrupt handling
 - Table-driven LoRa FSM
 
@@ -98,11 +100,11 @@ See [doc/AT_COMMANDS.md](doc/AT_COMMANDS.md) for the command reference.
 
 ## Hardware Target
 
-Current firmware target:
+Current firmware targets:
 
 - MCU: official CH32V003 development board
-- Radio: SX1278-compatible LoRa front end
-- Tested module family: Ebyte E32-style SX1278 modules
+- Radio backends: SX1278/E32-style modules and SX1262/E22-style modules
+- Valid build selections: `RADIO=SX1278` and `RADIO=SX1262`
 - Host link: CH32V003 USART1 connected to a USB-UART bridge or host UART
 - Default UART: 115200 baud, 8 data bits, no parity, 1 stop bit
 
@@ -112,11 +114,14 @@ Example CH32V003 development board:
 https://fr.aliexpress.com/item/1005005269690018.html
 ```
 
-Example Ebyte LoRa module:
+Example Ebyte SX1278/E32-style LoRa module:
 
 ```text
 https://fr.aliexpress.com/item/1005004447877680.html
 ```
+
+The SX1262 backend has been validated with a CH32V003 wired to an Ebyte
+E22/SX1262-style module and tested against an ESP32 LoRa node.
 
 Equivalent CH32V003 boards can be used if the pins required by
 [doc/PINOUT.md](doc/PINOUT.md) are available.
@@ -279,11 +284,37 @@ python3 tools/test_radio.py /dev/ttyACM0 \
   --send 70696E67
 ```
 
-For interoperability testing, [tools/test_loopback.py](tools/test_loopback.py)
-runs bidirectional profile checks between two serial modems. The `sx1262`
-branch has been validated with an ESP32 LoRa node on one side and a CH32V003
-`RADIO=SX1262` firmware on the other side, with the current loopback suite
-passing `56/56` profile-direction checks.
+### Loopback Test
+
+[tools/test_loopback.py](tools/test_loopback.py) runs bidirectional profile
+checks between two serial LoRa modems. It configures both sides, sends packets
+in both directions, and verifies the received payloads across the profile matrix
+defined in the script.
+
+Example with two USB serial ports:
+
+```bash
+python3 tools/test_loopback.py /dev/ttyACM0 /dev/ttyACM1
+```
+
+The profile matrix is expressed relative to a default base frequency of
+`433175000` Hz. Use `--base-freq` to run the same SF/BW/CR/preamble/sync/IQ/CRC
+matrix in another band:
+
+```bash
+python3 tools/test_loopback.py /dev/ttyACM0 /dev/ttyACM1 --base-freq 868000000
+python3 tools/test_loopback.py /dev/ttyACM0 /dev/ttyACM1 --base-freq 915000000
+```
+
+Use `--verbose` to print the AT exchange and received packet details:
+
+```bash
+python3 tools/test_loopback.py /dev/ttyACM0 /dev/ttyACM1 --verbose
+```
+
+The `sx1262` branch has been validated with an ESP32 LoRa node on one side and
+a CH32V003 `RADIO=SX1262` firmware on the other side, with the current loopback
+suite passing `56/56` profile-direction checks.
 
 ## Typical RX Setup
 
@@ -315,7 +346,7 @@ PHY CRC failures are emitted as:
 
 ```text
 core/              hardware-agnostic event/FSM/kernel services
-drivers/ch32v003/ CH32V003 hardware drivers and SX1278 driver
+drivers/ch32v003/ CH32V003 hardware drivers and radio backends
 subfsm/           table-driven domain FSMs
 handlers/         stateless event handlers
 link/             linker scripts
@@ -342,4 +373,4 @@ See [LICENSE](LICENSE) and [LICENSE-CONSTITUTION.md](LICENSE-CONSTITUTION.md).
 - `AT+ADDRESS` and `AT+NETWORKID` are stored for host-side compatibility,
   but raw LoRa RX/TX payloads are not framed with a network header.
 - Ebyte module RF performance outside its specified operating band depends on
-  the module RF front end, not only on the SX1278 synthesizer range.
+  the module RF front end, not only on the transceiver synthesizer range.
